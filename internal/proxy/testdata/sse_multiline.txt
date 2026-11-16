@@ -1,0 +1,5 @@
+event: message
+id: evt-1
+data: line1
+data: line2
+
