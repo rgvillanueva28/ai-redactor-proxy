@@ -128,6 +128,43 @@ func TestUnredactPrefersLongerPlaceholder(t *testing.T) {
 	}
 }
 
+// TestUnredact_10KBRoundTrip redacts the checked-in 10 KB mixed-PII fixture
+// with every detector enabled, then restores it and asserts byte equality. It
+// is the end-to-end contract the proxy relies on: whatever the detectors take
+// out must come back exactly as it went in.
+func TestUnredact_10KBRoundTrip(t *testing.T) {
+	original := loadMixedPII10KB(t)
+	reg := mixedPIIRegistry(t)
+
+	redacted, mapping := reg.Redactor().Redact(original)
+	defer PutMapping(mapping)
+
+	if redacted == original {
+		t.Fatal("redaction made no change to the mixed-PII fixture")
+	}
+	if n := len(mapping.All()); n < 70 {
+		t.Fatalf("mapping length = %d, want at least 70", n)
+	}
+
+	// Spot-check a value from several categories so the round trip is not the
+	// only evidence that redaction actually happened.
+	for _, secret := range []string{
+		"alice.wong@northwind-trading.com",
+		"4111 1111 1111 1111",
+		"/home/alice/projects/ledger/main.go",
+		"sk-proj-8fJ2kLm9QpR4tUvW6xYzA1bC3dE5fG7hI9jK",
+		"2001:db8::1",
+	} {
+		if strings.Contains(redacted, secret) {
+			t.Errorf("redacted fixture still contains %q", secret)
+		}
+	}
+
+	if restored := NewUnredactor().Unredact(redacted, mapping); restored != original {
+		t.Fatalf("10 KB round trip mismatch: got %d bytes, want %d", len(restored), len(original))
+	}
+}
+
 func TestUnredactLargeMapping(t *testing.T) {
 	const n = 120
 

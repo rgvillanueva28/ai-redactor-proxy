@@ -130,6 +130,60 @@ func TestMappingPoolGetPutCycle(t *testing.T) {
 	PutMapping(nil)
 }
 
+// BenchmarkMappingPool measures rapid GetMapping/Add/PutMapping cycles against
+// an unpooled NewMapping baseline, so `-benchmem` shows the allocation
+// reduction the pool buys. Steady-state pooled cycles reuse the Mapping and
+// both backing maps, leaving only the placeholder strings as garbage.
+func BenchmarkMappingPool(b *testing.B) {
+	cycle := func(m *Mapping) {
+		m.Add(CategoryEmail, "alice@example.com")
+		m.Add(CategoryIP, "10.0.0.1")
+	}
+
+	b.Run("pooled", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			m := GetMapping()
+			cycle(m)
+			PutMapping(m)
+		}
+	})
+
+	b.Run("unpooled", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			m := NewMapping()
+			cycle(m)
+			// Mirror PutMapping's reset so the only difference is pooling.
+			m.Reset()
+		}
+	})
+}
+
+// TestMappingPoolReducesAllocations asserts the pool's reason for existing:
+// a pooled request cycle allocates strictly fewer objects than a fresh
+// Mapping. BenchmarkMappingPool reports the same difference in allocs/op.
+func TestMappingPoolReducesAllocations(t *testing.T) {
+	cycle := func(m *Mapping) {
+		m.Add(CategoryEmail, "alice@example.com")
+		m.Add(CategoryIP, "10.0.0.1")
+	}
+
+	pooled := testing.AllocsPerRun(500, func() {
+		m := GetMapping()
+		cycle(m)
+		PutMapping(m)
+	})
+	unpooled := testing.AllocsPerRun(500, func() {
+		cycle(NewMapping())
+	})
+
+	if pooled >= unpooled {
+		t.Fatalf("pooled cycle allocated %.1f objects/op, unpooled %.1f; want pooling to allocate fewer",
+			pooled, unpooled)
+	}
+}
+
 // TestMappingPoolConcurrent exercises the pool from many goroutines; run with
 // -race to detect unsafe reuse.
 func TestMappingPoolConcurrent(t *testing.T) {
