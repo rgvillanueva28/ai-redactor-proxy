@@ -1,0 +1,166 @@
+package pii
+
+import (
+	"testing"
+
+	"github.com/local/redactor/internal/config"
+)
+
+func TestNewRegistryWiresEnabledDetectorsInStableOrder(t *testing.T) {
+	cfg := config.DefaultConfig()
+
+	r, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	want := []Category{
+		CategoryEmail,
+		CategoryPhone,
+		CategoryCreditCard,
+		CategorySSN,
+		CategoryIP,
+		CategoryPath,
+		CategoryAPIKey,
+	}
+	if len(r.detectors) != len(want) {
+		t.Fatalf("detector count = %d, want %d", len(r.detectors), len(want))
+	}
+	for i, w := range want {
+		if got := r.detectors[i].Category(); got != w {
+			t.Fatalf("detector %d category = %q, want %q", i, got, w)
+		}
+	}
+}
+
+func TestNewRegistryRespectsToggles(t *testing.T) {
+	tests := []struct {
+		name       string
+		configure  func(*config.Config)
+		text       string
+		wantOutput string
+	}{
+		{
+			name:       "email_disabled",
+			configure:  func(c *config.Config) { c.PII.EnableEmail = false },
+			text:       "mail foo@bar.com now",
+			wantOutput: "mail foo@bar.com now",
+		},
+		{
+			name:       "phone_disabled",
+			configure:  func(c *config.Config) { c.PII.EnablePhone = false },
+			text:       "call +14155552671 now",
+			wantOutput: "call +14155552671 now",
+		},
+		{
+			name:       "creditcard_disabled",
+			configure:  func(c *config.Config) { c.PII.EnableCreditCard = false },
+			text:       "card 4111111111111111 ok",
+			wantOutput: "card 4111111111111111 ok",
+		},
+		{
+			name:       "ssn_disabled",
+			configure:  func(c *config.Config) { c.PII.EnableSSN = false },
+			text:       "ssn 123-45-6789 ok",
+			wantOutput: "ssn 123-45-6789 ok",
+		},
+		{
+			name:       "ip_disabled",
+			configure:  func(c *config.Config) { c.PII.EnableIP = false },
+			text:       "host 10.0.0.1 ok",
+			wantOutput: "host 10.0.0.1 ok",
+		},
+		{
+			name:       "path_disabled",
+			configure:  func(c *config.Config) { c.PII.EnablePath = false },
+			text:       `open /home/alice/x.go ok`,
+			wantOutput: `open /home/alice/x.go ok`,
+		},
+		{
+			name:       "apikey_disabled",
+			configure:  func(c *config.Config) { c.PII.EnableAPIKey = false },
+			text:       "key sk-proj-abc123def456ghi789jkl012mno345pqr678 ok",
+			wantOutput: "key sk-proj-abc123def456ghi789jkl012mno345pqr678 ok",
+		},
+		{
+			name:       "email_enabled",
+			configure:  func(c *config.Config) {},
+			text:       "mail foo@bar.com now",
+			wantOutput: "mail <EMAIL_1> now",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			tc.configure(cfg)
+
+			r, err := NewRegistry(cfg)
+			if err != nil {
+				t.Fatalf("NewRegistry: %v", err)
+			}
+
+			got, mapping := r.Redactor().Redact(tc.text)
+			if got != tc.wantOutput {
+				t.Fatalf("Redact(%q) = %q, want %q", tc.text, got, tc.wantOutput)
+			}
+			PutMapping(mapping)
+		})
+	}
+}
+
+func TestNewRegistryAllDisabled(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.PII.EnableEmail = false
+	cfg.PII.EnablePhone = false
+	cfg.PII.EnableCreditCard = false
+	cfg.PII.EnableSSN = false
+	cfg.PII.EnableIP = false
+	cfg.PII.EnablePath = false
+	cfg.PII.EnableAPIKey = false
+
+	r, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	if len(r.detectors) != 0 {
+		t.Fatalf("detector count = %d, want 0", len(r.detectors))
+	}
+
+	text := "foo@bar.com +14155552671 4111111111111111 123-45-6789 10.0.0.1 /home/a/b"
+	if got, _ := r.Redactor().Redact(text); got != text {
+		t.Fatalf("Redact = %q, want unchanged %q", got, text)
+	}
+}
+
+func TestNewRegistryRedactsAndRestoresMixedText(t *testing.T) {
+	r, err := NewRegistry(config.DefaultConfig())
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	text := "mail foo@bar.com, host 10.0.0.1, ssh /home/alice/id_rsa"
+	redacted, mapping := r.Redactor().Redact(text)
+	defer PutMapping(mapping)
+
+	want := "mail <EMAIL_1>, host <IP_1>, ssh <PATH_1>"
+	if redacted != want {
+		t.Fatalf("Redact = %q, want %q", redacted, want)
+	}
+	if restored := r.Unredactor().Unredact(redacted, mapping); restored != text {
+		t.Fatalf("round trip = %q, want %q", restored, text)
+	}
+}
+
+func TestNewRegistryNilConfig(t *testing.T) {
+	r, err := NewRegistry(nil)
+	if err != nil {
+		t.Fatalf("NewRegistry(nil): %v", err)
+	}
+	if len(r.detectors) != 0 {
+		t.Fatalf("detector count = %d, want 0", len(r.detectors))
+	}
+	if r.Redactor() == nil || r.Unredactor() == nil {
+		t.Fatal("Redactor()/Unredactor() must not be nil")
+	}
+}

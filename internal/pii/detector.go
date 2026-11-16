@@ -2,32 +2,31 @@
 // AI requests and responses.
 package pii
 
-// Category enumerates supported PII categories.
-type Category string
+import "github.com/local/redactor/internal/pii/core"
 
-const (
-	CategoryEmail      Category = "EMAIL"
-	CategoryPhone      Category = "PHONE"
-	CategoryCreditCard Category = "CC"
-	CategorySSN        Category = "SSN"
-	CategoryIP         Category = "IP"
-	CategoryPath       Category = "PATH"
-	CategoryAPIKey     Category = "APIKEY"
-	CategoryDomain     Category = "DOMAIN"
-	CategoryClientName Category = "CLIENT"
-	CategoryPersonName Category = "NAME"
-)
+// The detector contract lives in package core so that the concrete detectors
+// (package detectors, imported by the registry) can depend on it without
+// creating an import cycle with this package. These aliases keep pii.Category,
+// pii.Match and pii.Detector as the public contract used everywhere else.
+
+// Category enumerates supported PII categories.
+type Category = core.Category
 
 // Match describes a single PII occurrence.
-type Match struct {
-	Start    int      // byte offset inclusive
-	End      int      // byte offset exclusive
-	Category Category // category of the matched text
-	Value    string   // original text (== input[Start:End], but kept for clarity)
-}
+type Match = core.Match
 
 // Detector identifies PII in a string.
-type Detector interface {
-	Category() Category
-	Detect(text string) []Match
-}
+type Detector = core.Detector
+
+const (
+	CategoryEmail      = core.CategoryEmail
+	CategoryPhone      = core.CategoryPhone
+	CategoryCreditCard = core.CategoryCreditCard
+	CategorySSN        = core.CategorySSN
+	CategoryIP         = core.CategoryIP
+	CategoryPath       = core.CategoryPath
+	CategoryAPIKey     = core.CategoryAPIKey
+	CategoryDomain     = core.CategoryDomain
+	CategoryClientName = core.CategoryClientName
+	CategoryPersonName = core.CategoryPersonName
+)
