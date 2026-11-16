@@ -1,6 +1,7 @@
 package detectors
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/local/redactor/internal/pii/core"
@@ -45,6 +46,34 @@ func TestAPIKeyDetector(t *testing.T) {
 		t.Run("negative/"+tc, func(t *testing.T) {
 			if matches := d.Detect(tc); len(matches) != 0 {
 				t.Fatalf("Detect(%q) = %v, want no matches", tc, matches)
+			}
+		})
+	}
+}
+
+// TestAPIKeyEveryPrefixMatchesAtMinimumBody guards the single-alternation
+// build: every spec in apiKeySpecs must still fire at exactly its minimum body
+// length, and the match must cover the whole token (not a shorter generic
+// prefix branch).
+func TestAPIKeyEveryPrefixMatchesAtMinimumBody(t *testing.T) {
+	d := NewAPIKey()
+
+	for _, spec := range apiKeySpecs {
+		// apiKeySpecs stores regex fragments; xox[baprs]- is the one prefix
+		// that is not already a literal, so pick a concrete Slack variant.
+		prefix := spec.prefix
+		if prefix == `xox[baprs]-` {
+			prefix = "xoxb-"
+		}
+		token := prefix + strings.Repeat("a", spec.minBody)
+
+		t.Run(token, func(t *testing.T) {
+			matches := d.Detect(token)
+			if len(matches) != 1 {
+				t.Fatalf("Detect(%q) returned %d matches, want 1 (%v)", token, len(matches), matches)
+			}
+			if matches[0].Start != 0 || matches[0].End != len(token) || matches[0].Value != token {
+				t.Fatalf("Detect(%q) = %v, want one match covering the whole token", token, matches[0])
 			}
 		})
 	}
