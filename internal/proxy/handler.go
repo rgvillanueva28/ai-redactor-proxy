@@ -99,6 +99,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		body = []byte{}
 	}
 
+	// Mutators may have enriched the request's context (for example, storing
+	// per-request state such as a redaction mapping for the response phase).
+	// Re-read it from the request so the response mutators see those values;
+	// the provider was stored on ctx before the loop and survives because the
+	// mutators derive their context from it.
+	ctx = r.Context()
+
 	r.Body = getBodyReader(body)
 	// The pooled buffer holding body is recycled as soon as the request has
 	// been forwarded, and replaying a pre-mutation body would bypass
