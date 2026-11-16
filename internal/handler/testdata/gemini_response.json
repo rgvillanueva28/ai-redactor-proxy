@@ -1,0 +1,1 @@
+{"candidates":[{"content":{"role":"model","parts":[{"text":"Email <EMAIL_1> or call <PHONE_1>."}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":31,"candidatesTokenCount":12,"totalTokenCount":43},"modelVersion":"gemini-1.5-pro"}

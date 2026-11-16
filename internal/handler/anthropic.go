@@ -1,0 +1,92 @@
+package handler
+
+import (
+	"context"
+	"net/http"
+
+	"github.com/local/redactor/internal/pii"
+	"github.com/local/redactor/internal/proxy"
+)
+
+// anthropicRequestFields are the request leaves that carry text in the Messages
+// dialect:
+//
+//	{"system": "..." | [{"type":"text","text":"..."}],
+//	 "messages":[{"content":"..."} | [{"type":"text","text":"..."}]]}
+var anthropicRequestFields = newFieldSet(
+	[]string{"messages", "content"},
+	[]string{"messages", "content", "text"},
+	[]string{"system"},
+	[]string{"system", "text"},
+)
+
+// anthropicResponseFields are the buffered Messages response leaves:
+// content[].text. Non-text blocks (tool_use input, thinking signatures) are
+// left alone.
+var anthropicResponseFields = newFieldSet(
+	[]string{"content", "text"},
+)
+
+// anthropicStreamFields are the streaming Messages delta leaves:
+// content_block_delta.delta.text.
+var anthropicStreamFields = newFieldSet(
+	[]string{"delta", "text"},
+)
+
+// AnthropicHandler redacts Anthropic Messages API requests and unredacts the
+// matching responses.
+//
+// The Messages dialect is structurally close to OpenAI's but differs in the
+// places text hides: the system prompt is a top-level "system" field (string or
+// array of text blocks) rather than a message, and responses carry an array of
+// typed content blocks instead of a single message object. Both forms are
+// walked here.
+//
+// An AnthropicHandler is stateless and safe for concurrent use.
+type AnthropicHandler struct {
+	redactor   *pii.Redactor
+	unredactor *pii.Unredactor
+}
+
+// Compile-time assertions that AnthropicHandler satisfies the proxy contracts.
+var (
+	_ proxy.RequestMutator  = (*AnthropicHandler)(nil)
+	_ proxy.ResponseMutator = (*AnthropicHandler)(nil)
+)
+
+// NewAnthropicHandler returns a handler that redacts with r and unredacts with u.
+// A nil redactor or unredactor disables that direction of the transformation.
+func NewAnthropicHandler(r *pii.Redactor, u *pii.Unredactor) *AnthropicHandler {
+	return &AnthropicHandler{redactor: r, unredactor: u}
+}
+
+// MutateRequest redacts system (string or array of text blocks) and
+// messages[].content (string or array of blocks), and publishes the
+// per-request mapping on the request context.
+func (h *AnthropicHandler) MutateRequest(ctx context.Context, req *http.Request, body []byte) ([]byte, error) {
+	if h == nil {
+		return body, nil
+	}
+	return redactBody(req, body, h.redactor, anthropicRequestFields)
+}
+
+// MutateResponse restores placeholders in content[].text.
+func (h *AnthropicHandler) MutateResponse(ctx context.Context, resp *http.Response, body []byte) ([]byte, error) {
+	if h == nil {
+		return body, nil
+	}
+	return unredactBody(ctx, resp, body, h.unredactor, anthropicResponseFields)
+}
+
+// MutateStreamChunk restores placeholders in one SSE event's
+// content_block_delta.delta.text.
+//
+// Every other event type — message_start, content_block_start, ping,
+// message_delta, message_stop — is returned byte-for-byte unchanged, including
+// its "event:" line, because Anthropic clients dispatch on the event name.
+func (h *AnthropicHandler) MutateStreamChunk(ctx context.Context, chunk []byte, contentType string) ([]byte, error) {
+	if h == nil {
+		return chunk, nil
+	}
+	return unredactSSEEvent(ctx, chunk, h.unredactor, anthropicStreamFields)
+}

@@ -1,0 +1,1 @@
+{"id":"msg_01abc","type":"message","role":"assistant","model":"claude-3-opus-20240229","content":[{"type":"text","text":"The card belongs to <CC_1>."},{"type":"text","text":"Email <EMAIL_1> if you need a receipt."},{"type":"tool_use","id":"toolu_01","name":"lookup","input":{"query":"card lookup"}}],"stop_reason":"end_turn","usage":{"input_tokens":12,"output_tokens":9}}
