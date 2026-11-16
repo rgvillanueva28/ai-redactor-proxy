@@ -1,0 +1,1 @@
+{"id":"chatcmpl-9xY2","object":"chat.completion","created":1735689600,"model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"Alice can be reached at <EMAIL_1> or <PHONE_1>. Her card number is <CC_1> and her SSN is <SSN_1>."},"finish_reason":"stop"}],"usage":{"prompt_tokens":64,"completion_tokens":24,"total_tokens":88}}
