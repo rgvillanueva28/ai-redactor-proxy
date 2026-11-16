@@ -1,0 +1,4 @@
+# SSE fixtures must be checked out with LF line endings. The provider handlers
+# serialize SSE with LF (per the SSE spec) and the stream-chunk tests compare
+# raw bytes against these files, so CRLF checkouts break the tests.
+*.txt text eol=lf
