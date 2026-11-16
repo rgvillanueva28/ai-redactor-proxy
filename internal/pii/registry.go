@@ -16,9 +16,11 @@ type Registry struct {
 // NewRegistry builds a Registry from cfg.
 //
 // Detectors are appended in a fixed order (email, phone, credit card, SSN, IP,
-// path, API key) so that placeholder numbering is deterministic for a given
-// config and text. Phase 3 adds the domain, client-name and person-name
-// detectors to the end of that list.
+// path, API key, domain, client name, person name) so that placeholder
+// numbering is deterministic for a given config and text. The Phase 1-2
+// detectors come first so that adding the newer categories did not renumber
+// existing placeholders. Client names need a configured list to be worth
+// wiring; person names are opt-in because the heuristic is noisy.
 func NewRegistry(cfg *config.Config) (*Registry, error) {
 	var ds []Detector
 	if cfg != nil {
@@ -43,6 +45,19 @@ func NewRegistry(cfg *config.Config) (*Registry, error) {
 		}
 		if p.EnableAPIKey {
 			ds = append(ds, detectors.NewAPIKey())
+		}
+		if p.EnableDomain {
+			ds = append(ds, detectors.NewDomain())
+		}
+		if p.EnableClientName && len(p.ClientNames.Names) > 0 {
+			clientNames, err := detectors.NewClientName(p.ClientNames.Names)
+			if err != nil {
+				return nil, err
+			}
+			ds = append(ds, clientNames)
+		}
+		if p.EnablePersonName {
+			ds = append(ds, detectors.NewPersonName())
 		}
 	}
 
