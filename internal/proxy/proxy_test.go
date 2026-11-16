@@ -262,6 +262,60 @@ func TestMiddleware_ResponseMutatorCalled(t *testing.T) {
 	}
 }
 
+// ctxStateKey is the context key used by tests that exercise per-request
+// state sharing between the request and response mutator phases.
+type ctxStateKey struct{}
+
+func TestMiddleware_RequestMutatorStoresStateOnContext(t *testing.T) {
+	const original = `{"choices":[]}`
+	const stored = "stored"
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, original)
+	}))
+	defer upstream.Close()
+
+	// The request mutator enriches the request context, the way an adapter
+	// stores a redaction mapping so the response phase can unredact with it.
+	reqMutator := RequestMutatorFunc(func(ctx context.Context, req *http.Request, body []byte) ([]byte, error) {
+		*req = *req.WithContext(context.WithValue(req.Context(), ctxStateKey{}, stored))
+		return body, nil
+	})
+
+	// The response mutator must observe that value through the ctx it is
+	// given, not through the request (which it never sees).
+	wantProvider := inferProvider(testHost, upstream.URL)
+	sawProvider := false
+	respMutator := ResponseMutatorFuncs{RespFunc: func(ctx context.Context, resp *http.Response, body []byte) ([]byte, error) {
+		if got := ContextProvider(ctx); got != wantProvider {
+			return nil, fmt.Errorf("response-phase provider = %q, want %q", got, wantProvider)
+		}
+		sawProvider = true
+		got, ok := ctx.Value(ctxStateKey{}).(string)
+		if !ok {
+			return nil, fmt.Errorf("response-phase context missing value stored by request mutator")
+		}
+		return append(body, "["+got+"]"...), nil
+	}}
+
+	_, proxySrv := newProxy(t, upstream.URL, []RequestMutator{reqMutator}, []ResponseMutator{respMutator})
+
+	resp := mustDo(t, proxyRequest(t, http.MethodPost, proxySrv.URL, "/v1/chat", testHost, strings.NewReader(`{"prompt":"hi"}`)))
+	body := readBody(t, resp)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.StatusCode, body)
+	}
+	if !sawProvider {
+		t.Fatal("response mutator was not called")
+	}
+	want := original + "[" + stored + "]"
+	if body != want {
+		t.Errorf("body = %q, want %q", body, want)
+	}
+}
+
 // uppercaseDataChunk uppercases the payload of every SSE data line, leaving the
 // event framing intact.
 func uppercaseDataChunk(chunk []byte, contentType string) ([]byte, error) {
