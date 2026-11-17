@@ -71,7 +71,7 @@ func newProxyServer(t *testing.T, upstreamURL string) *httptest.Server {
 	if err != nil {
 		t.Fatalf("pii.NewRegistry: %v", err)
 	}
-	adapter := handler.NewAdapter(reg.Redactor(), reg.Unredactor(), false)
+	adapter := handler.NewAdapter(reg.Redactor(), reg.Unredactor(), false, false)
 
 	// Use plain http upstream URLs so the redirected dial does not attempt TLS.
 	router := proxy.NewRouter().
@@ -401,7 +401,7 @@ func TestE2E_HealthEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pii.NewRegistry: %v", err)
 	}
-	adapter := handler.NewAdapter(reg.Redactor(), reg.Unredactor(), false)
+	adapter := handler.NewAdapter(reg.Redactor(), reg.Unredactor(), false, false)
 	proxyHandler := proxy.NewHandler(
 		proxy.NewRouter(),
 		proxy.NewForwarder(),

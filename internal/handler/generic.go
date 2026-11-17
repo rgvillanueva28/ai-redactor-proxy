@@ -26,6 +26,7 @@ type GenericHandler struct {
 	redactor    *pii.Redactor
 	unredactor  *pii.Unredactor
 	logRedacted bool
+	logBodies   bool
 }
 
 // Compile-time assertions that GenericHandler satisfies the proxy contracts.
@@ -37,9 +38,11 @@ var (
 // NewGenericHandler returns a handler that redacts with r and unredacts with u.
 // A nil redactor or unredactor disables that direction of the transformation,
 // which keeps the handler usable in pass-through tests. When logRedacted is
-// true every redacted item is logged at info level.
-func NewGenericHandler(r *pii.Redactor, u *pii.Unredactor, logRedacted bool) *GenericHandler {
-	return &GenericHandler{redactor: r, unredactor: u, logRedacted: logRedacted}
+// true every redacted item is logged at info level. When logBodies is true
+// every request, response and stream chunk body is logged at debug level,
+// before and after the transformation.
+func NewGenericHandler(r *pii.Redactor, u *pii.Unredactor, logRedacted bool, logBodies bool) *GenericHandler {
+	return &GenericHandler{redactor: r, unredactor: u, logRedacted: logRedacted, logBodies: logBodies}
 }
 
 // MutateRequest walks the body, redacts every string leaf, and returns the
@@ -68,6 +71,8 @@ func (g *GenericHandler) MutateRequest(ctx context.Context, req *http.Request, b
 	// placeholders are re-registered into m in document order.
 	m := pii.GetMapping()
 
+	logBody(g.logBodies, "request body (original)", body)
+
 	out, err := WalkJSON(body, func(s string) (string, error) {
 		redacted, local := g.redactor.Redact(s)
 		if local == nil {
@@ -80,6 +85,8 @@ func (g *GenericHandler) MutateRequest(ctx context.Context, req *http.Request, b
 		pii.PutMapping(m)
 		return nil, err
 	}
+
+	logBody(g.logBodies, "request body (redacted)", out)
 
 	// Publish the mapping for the response half of the exchange. A mutator
 	// cannot replace the context its caller holds, so the request is rewritten
@@ -99,13 +106,29 @@ func (g *GenericHandler) MutateRequest(ctx context.Context, req *http.Request, b
 //
 // The mapping is looked up on ctx first and then on resp.Request's context,
 // because the proxy hands response mutators the request's context rather than
-// any value a request mutator attached.
+// any value a request mutator attached. When logBodies is enabled the body is
+// logged before and after unredaction.
 func (g *GenericHandler) MutateResponse(ctx context.Context, resp *http.Response, body []byte) ([]byte, error) {
+	if g == nil {
+		return body, nil
+	}
+	out, err := g.unredactResponse(ctx, resp, body)
+	if err != nil {
+		return nil, err
+	}
+	logBody(g.logBodies, "response body (redacted)", body)
+	logBody(g.logBodies, "response body (unredacted)", out)
+	return out, nil
+}
+
+// unredactResponse restores placeholders in every string leaf of body and
+// returns body unchanged when there was nothing to restore.
+func (g *GenericHandler) unredactResponse(ctx context.Context, resp *http.Response, body []byte) ([]byte, error) {
 	m := mappingFromContext(ctx)
 	if m == nil && resp != nil && resp.Request != nil {
 		m = mappingFromContext(resp.Request.Context())
 	}
-	if m == nil || len(body) == 0 || g == nil || g.unredactor == nil {
+	if m == nil || len(body) == 0 || g.unredactor == nil {
 		return body, nil
 	}
 	if !json.Valid(body) {
@@ -123,9 +146,25 @@ func (g *GenericHandler) MutateResponse(ctx context.Context, resp *http.Response
 //
 // Events whose data is not JSON (the "[DONE]" sentinel, keep-alives, provider
 // specific non-JSON frames) are passed through untouched rather than aborting a
-// stream that is already in flight.
+// stream that is already in flight. When logBodies is enabled every chunk is
+// logged before and after unredaction.
 func (g *GenericHandler) MutateStreamChunk(ctx context.Context, chunk []byte, contentType string) ([]byte, error) {
-	if len(chunk) == 0 || g == nil || g.unredactor == nil {
+	if g == nil {
+		return chunk, nil
+	}
+	out, err := g.unredactStreamChunk(ctx, chunk)
+	if err != nil {
+		return nil, err
+	}
+	logBody(g.logBodies, "stream chunk (redacted)", chunk)
+	logBody(g.logBodies, "stream chunk (unredacted)", out)
+	return out, nil
+}
+
+// unredactStreamChunk restores placeholders in one SSE event's JSON data,
+// returning chunk unchanged when the event carries no transformable payload.
+func (g *GenericHandler) unredactStreamChunk(ctx context.Context, chunk []byte) ([]byte, error) {
+	if len(chunk) == 0 || g.unredactor == nil {
 		return chunk, nil
 	}
 

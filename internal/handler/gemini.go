@@ -40,6 +40,7 @@ type GeminiHandler struct {
 	redactor    *pii.Redactor
 	unredactor  *pii.Unredactor
 	logRedacted bool
+	logBodies   bool
 }
 
 // Compile-time assertions that GeminiHandler satisfies the proxy contracts.
@@ -50,9 +51,11 @@ var (
 
 // NewGeminiHandler returns a handler that redacts with r and unredacts with u.
 // A nil redactor or unredactor disables that direction of the transformation.
-// When logRedacted is true every redacted item is logged at info level.
-func NewGeminiHandler(r *pii.Redactor, u *pii.Unredactor, logRedacted bool) *GeminiHandler {
-	return &GeminiHandler{redactor: r, unredactor: u, logRedacted: logRedacted}
+// When logRedacted is true every redacted item is logged at info level. When
+// logBodies is true every request, response and stream chunk body is logged at
+// debug level, before and after the transformation.
+func NewGeminiHandler(r *pii.Redactor, u *pii.Unredactor, logRedacted bool, logBodies bool) *GeminiHandler {
+	return &GeminiHandler{redactor: r, unredactor: u, logRedacted: logRedacted, logBodies: logBodies}
 }
 
 // MutateRequest redacts contents[].parts[].text and
@@ -62,7 +65,13 @@ func (h *GeminiHandler) MutateRequest(ctx context.Context, req *http.Request, bo
 	if h == nil {
 		return body, nil
 	}
-	return redactBody(req, body, h.redactor, geminiRequestFields, h.logRedacted)
+	out, err := redactBody(req, body, h.redactor, geminiRequestFields, h.logRedacted)
+	if err != nil {
+		return nil, err
+	}
+	logBody(h.logBodies, "request body (original)", body)
+	logBody(h.logBodies, "request body (redacted)", out)
+	return out, nil
 }
 
 // MutateResponse restores placeholders in candidates[].content.parts[].text.
@@ -70,7 +79,13 @@ func (h *GeminiHandler) MutateResponse(ctx context.Context, resp *http.Response,
 	if h == nil {
 		return body, nil
 	}
-	return unredactBody(ctx, resp, body, h.unredactor, geminiResponseFields)
+	out, err := unredactBody(ctx, resp, body, h.unredactor, geminiResponseFields)
+	if err != nil {
+		return nil, err
+	}
+	logBody(h.logBodies, "response body (redacted)", body)
+	logBody(h.logBodies, "response body (unredacted)", out)
+	return out, nil
 }
 
 // MutateStreamChunk restores placeholders in Gemini's streaming response.
@@ -86,8 +101,26 @@ func (h *GeminiHandler) MutateResponse(ctx context.Context, resp *http.Response,
 // proxy hands over as one serialised event per call. Those need the same
 // SSE-aware unwrapping OpenAI and Anthropic use; treating the framing as JSON
 // would make the chunk look invalid and leak placeholders to the client.
+//
+// When logBodies is enabled every chunk is logged as it passes through, before
+// and after unredaction.
 func (h *GeminiHandler) MutateStreamChunk(ctx context.Context, chunk []byte, contentType string) ([]byte, error) {
-	if h == nil || len(chunk) == 0 || h.unredactor == nil {
+	if h == nil {
+		return chunk, nil
+	}
+	out, err := h.unredactStreamChunk(ctx, chunk, contentType)
+	if err != nil {
+		return nil, err
+	}
+	logBody(h.logBodies, "stream chunk (redacted)", chunk)
+	logBody(h.logBodies, "stream chunk (unredacted)", out)
+	return out, nil
+}
+
+// unredactStreamChunk applies the Gemini streaming unredaction rules and
+// returns chunk unchanged when there was nothing to restore.
+func (h *GeminiHandler) unredactStreamChunk(ctx context.Context, chunk []byte, contentType string) ([]byte, error) {
+	if len(chunk) == 0 || h.unredactor == nil {
 		return chunk, nil
 	}
 	m := mappingFromContext(ctx)

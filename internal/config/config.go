@@ -35,6 +35,7 @@ type PIIConfig struct {
 	EnableClientName bool              `toml:"enable_client_name"`
 	ClientNames      ClientNamesConfig `toml:"client_names"`
 	LogRedacted      bool              `toml:"log_redacted"`
+	LogBodies        bool              `toml:"log_bodies"`
 }
 
 // ClientNamesConfig holds literal client names that must always be redacted.
@@ -66,6 +67,7 @@ func DefaultConfig() *Config {
 			EnableClientName: true,
 			ClientNames:      ClientNamesConfig{Names: nil},
 			LogRedacted:      false,
+			LogBodies:        false,
 		},
 		Upstream: map[string]UpstreamConfig{
 			"openai": {

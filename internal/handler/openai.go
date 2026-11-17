@@ -44,6 +44,7 @@ type OpenAIHandler struct {
 	redactor    *pii.Redactor
 	unredactor  *pii.Unredactor
 	logRedacted bool
+	logBodies   bool
 }
 
 // Compile-time assertions that OpenAIHandler satisfies the proxy contracts.
@@ -54,9 +55,11 @@ var (
 
 // NewOpenAIHandler returns a handler that redacts with r and unredacts with u.
 // A nil redactor or unredactor disables that direction of the transformation.
-// When logRedacted is true every redacted item is logged at info level.
-func NewOpenAIHandler(r *pii.Redactor, u *pii.Unredactor, logRedacted bool) *OpenAIHandler {
-	return &OpenAIHandler{redactor: r, unredactor: u, logRedacted: logRedacted}
+// When logRedacted is true every redacted item is logged at info level. When
+// logBodies is true every request, response and stream chunk body is logged at
+// debug level, before and after the transformation.
+func NewOpenAIHandler(r *pii.Redactor, u *pii.Unredactor, logRedacted bool, logBodies bool) *OpenAIHandler {
+	return &OpenAIHandler{redactor: r, unredactor: u, logRedacted: logRedacted, logBodies: logBodies}
 }
 
 // MutateRequest redacts messages[].content (string or array of parts) and
@@ -65,7 +68,13 @@ func (h *OpenAIHandler) MutateRequest(ctx context.Context, req *http.Request, bo
 	if h == nil {
 		return body, nil
 	}
-	return redactBody(req, body, h.redactor, openAIRequestFields, h.logRedacted)
+	out, err := redactBody(req, body, h.redactor, openAIRequestFields, h.logRedacted)
+	if err != nil {
+		return nil, err
+	}
+	logBody(h.logBodies, "request body (original)", body)
+	logBody(h.logBodies, "request body (redacted)", out)
+	return out, nil
 }
 
 // MutateResponse restores placeholders in choices[].message.content.
@@ -73,7 +82,13 @@ func (h *OpenAIHandler) MutateResponse(ctx context.Context, resp *http.Response,
 	if h == nil {
 		return body, nil
 	}
-	return unredactBody(ctx, resp, body, h.unredactor, openAIResponseFields)
+	out, err := unredactBody(ctx, resp, body, h.unredactor, openAIResponseFields)
+	if err != nil {
+		return nil, err
+	}
+	logBody(h.logBodies, "response body (redacted)", body)
+	logBody(h.logBodies, "response body (unredacted)", out)
+	return out, nil
 }
 
 // MutateStreamChunk restores placeholders in one SSE chunk's
@@ -83,5 +98,11 @@ func (h *OpenAIHandler) MutateStreamChunk(ctx context.Context, chunk []byte, con
 	if h == nil {
 		return chunk, nil
 	}
-	return unredactSSEEvent(ctx, chunk, h.unredactor, openAIStreamFields)
+	out, err := unredactSSEEvent(ctx, chunk, h.unredactor, openAIStreamFields)
+	if err != nil {
+		return nil, err
+	}
+	logBody(h.logBodies, "stream chunk (redacted)", chunk)
+	logBody(h.logBodies, "stream chunk (unredacted)", out)
+	return out, nil
 }

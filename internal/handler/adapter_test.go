@@ -24,7 +24,7 @@ const adapterDispatchBody = `{"messages":[{"role":"user","content":"alice.smith@
 func newAdapterForTest(t *testing.T) *Adapter {
 	t.Helper()
 	reg := newProviderRegistry(t)
-	return NewAdapter(reg.Redactor(), reg.Unredactor(), false)
+	return NewAdapter(reg.Redactor(), reg.Unredactor(), false, false)
 }
 
 // adapterContext stores p under the context key the proxy uses for a resolved
@@ -297,7 +297,7 @@ func TestAdapter_LogRedacted(t *testing.T) {
 	defer slog.SetDefault(prev)
 
 	reg := newProviderRegistry(t)
-	adapter := NewAdapter(reg.Redactor(), reg.Unredactor(), true)
+	adapter := NewAdapter(reg.Redactor(), reg.Unredactor(), true, false)
 
 	const body = `{"messages":[{"role":"user","content":"alice.smith@example.com"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
@@ -324,12 +324,104 @@ func TestAdapter_LogRedacted(t *testing.T) {
 
 	// With the option disabled the adapter must stay silent.
 	before := buf.Len()
-	quiet := NewAdapter(reg.Redactor(), reg.Unredactor(), false)
+	quiet := NewAdapter(reg.Redactor(), reg.Unredactor(), false, false)
 	quietReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
 	if _, err := quiet.MutateRequest(adapterContext(quietReq.Context(), proxy.ProviderOpenAI), quietReq, []byte(body)); err != nil {
 		t.Fatalf("MutateRequest (disabled): %v", err)
 	}
 	if buf.Len() != before {
 		t.Errorf("disabled log_redacted still logged %q", buf.String()[before:])
+	}
+}
+
+// TestAdapter_LogBodies verifies that when the log_bodies option is on, the
+// full request, response and stream chunk bodies are logged at debug level
+// before and after the transformation, and that the option being off keeps the
+// log silent.
+func TestAdapter_LogBodies(t *testing.T) {
+	prev := slog.Default()
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(prev)
+
+	reg := newProviderRegistry(t)
+	adapter := NewAdapter(reg.Redactor(), reg.Unredactor(), false, true)
+
+	const reqBody = `{"messages":[{"role":"user","content":"alice.smith@example.com"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(reqBody))
+	if _, err := adapter.MutateRequest(adapterContext(req.Context(), proxy.ProviderOpenAI), req, []byte(reqBody)); err != nil {
+		t.Fatalf("MutateRequest: %v", err)
+	}
+
+	logged := buf.String()
+	for _, want := range []string{
+		`"msg":"request body (original)"`,
+		`alice.smith@example.com`,
+		`"msg":"request body (redacted)"`,
+		`<EMAIL_1>`,
+	} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("request log is missing %s:\n%s", want, logged)
+		}
+	}
+
+	// Each direction is checked against only the lines it produced, so a
+	// matching string from an earlier stage cannot mask a missing log line.
+	// The provider is re-attached because MutateRequest only publishes the
+	// mapping on the request's own context, not the caller's.
+	before := buf.Len()
+	const respBody = `{"choices":[{"message":{"role":"assistant","content":"Email <EMAIL_1> please."}}]}`
+	resp := &http.Response{StatusCode: http.StatusOK, Request: req}
+	respCtx := adapterContext(req.Context(), proxy.ProviderOpenAI)
+	if _, err := adapter.MutateResponse(respCtx, resp, []byte(respBody)); err != nil {
+		t.Fatalf("MutateResponse: %v", err)
+	}
+	respLogged := buf.String()[before:]
+	for _, want := range []string{
+		`"msg":"response body (redacted)"`,
+		`<EMAIL_1>`,
+		`"msg":"response body (unredacted)"`,
+		`alice.smith@example.com`,
+	} {
+		if !strings.Contains(respLogged, want) {
+			t.Errorf("response log is missing %s:\n%s", want, respLogged)
+		}
+	}
+
+	before = buf.Len()
+	const chunk = "data: {\"choices\":[{\"delta\":{\"content\":\"Email <EMAIL_1> please.\"}}]}\n\n"
+	if _, err := adapter.MutateStreamChunk(respCtx, []byte(chunk), "text/event-stream"); err != nil {
+		t.Fatalf("MutateStreamChunk: %v", err)
+	}
+	chunkLogged := buf.String()[before:]
+	for _, want := range []string{
+		`"msg":"stream chunk (redacted)"`,
+		`<EMAIL_1>`,
+		`"msg":"stream chunk (unredacted)"`,
+		`alice.smith@example.com`,
+	} {
+		if !strings.Contains(chunkLogged, want) {
+			t.Errorf("stream chunk log is missing %s:\n%s", want, chunkLogged)
+		}
+	}
+
+	// With the option disabled the adapter must not log bodies at all.
+	before = buf.Len()
+	quiet := NewAdapter(reg.Redactor(), reg.Unredactor(), false, false)
+	quietReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(reqBody))
+	quietCtx := adapterContext(quietReq.Context(), proxy.ProviderOpenAI)
+	if _, err := quiet.MutateRequest(quietCtx, quietReq, []byte(reqBody)); err != nil {
+		t.Fatalf("MutateRequest (disabled): %v", err)
+	}
+	quietResp := &http.Response{StatusCode: http.StatusOK, Request: quietReq}
+	quietRespCtx := adapterContext(quietReq.Context(), proxy.ProviderOpenAI)
+	if _, err := quiet.MutateResponse(quietRespCtx, quietResp, []byte(respBody)); err != nil {
+		t.Fatalf("MutateResponse (disabled): %v", err)
+	}
+	if _, err := quiet.MutateStreamChunk(quietRespCtx, []byte(chunk), "text/event-stream"); err != nil {
+		t.Fatalf("MutateStreamChunk (disabled): %v", err)
+	}
+	if got := buf.String()[before:]; got != "" {
+		t.Errorf("disabled log_bodies still logged %q", got)
 	}
 }

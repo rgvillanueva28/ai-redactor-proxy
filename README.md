@@ -59,6 +59,7 @@ enable_domain = true
 enable_person_name = false  # High false-positive rate, opt-in only
 enable_client_name = true
 log_redacted = false  # Log each redacted item (placeholder, category, original value) at info level
+log_bodies = false  # Log full request/response bodies at debug level (very verbose)
 
 [pii.client_names]
 names = ["Acme Corp", "Project Phoenix", "Internal API"]

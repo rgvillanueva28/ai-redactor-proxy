@@ -24,6 +24,7 @@ enable_domain = true
 enable_person_name = true
 enable_client_name = true
 log_redacted = true
+log_bodies = true
 
 [pii.client_names]
 names = ["Acme Corp", "Project Phoenix", "John Smith"]
@@ -84,6 +85,9 @@ func TestParseValidTOML(t *testing.T) {
 	}
 	if !pii.LogRedacted {
 		t.Error("log_redacted = false, want true")
+	}
+	if !pii.LogBodies {
+		t.Error("log_bodies = false, want true")
 	}
 
 	wantNames := []string{"Acme Corp", "Project Phoenix", "John Smith"}
@@ -265,6 +269,9 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if pii.LogRedacted {
 		t.Error("default log_redacted = true, want false")
+	}
+	if pii.LogBodies {
+		t.Error("default log_bodies = true, want false")
 	}
 	if len(pii.ClientNames.Names) != 0 {
 		t.Errorf("default client names = %#v, want empty", pii.ClientNames.Names)

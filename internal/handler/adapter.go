@@ -23,6 +23,7 @@ type Adapter struct {
 	gemini      *GeminiHandler
 	generic     *GenericHandler
 	logRedacted bool
+	logBodies   bool
 }
 
 // Compile-time assertions that Adapter satisfies the proxy contracts.
@@ -34,14 +35,16 @@ var (
 // NewAdapter returns an Adapter that dispatches to per-provider handlers built
 // from r and u. A nil redactor or unredactor disables that direction of the
 // transformation. When logRedacted is true, every redacted item is logged at
-// info level as it is produced.
-func NewAdapter(r *pii.Redactor, u *pii.Unredactor, logRedacted bool) *Adapter {
+// info level as it is produced. When logBodies is true, the full request and
+// response bodies are logged at debug level at every transformation stage.
+func NewAdapter(r *pii.Redactor, u *pii.Unredactor, logRedacted bool, logBodies bool) *Adapter {
 	return &Adapter{
-		openai:      NewOpenAIHandler(r, u, logRedacted),
-		anthropic:   NewAnthropicHandler(r, u, logRedacted),
-		gemini:      NewGeminiHandler(r, u, logRedacted),
-		generic:     NewGenericHandler(r, u, logRedacted),
+		openai:      NewOpenAIHandler(r, u, logRedacted, logBodies),
+		anthropic:   NewAnthropicHandler(r, u, logRedacted, logBodies),
+		gemini:      NewGeminiHandler(r, u, logRedacted, logBodies),
+		generic:     NewGenericHandler(r, u, logRedacted, logBodies),
 		logRedacted: logRedacted,
+		logBodies:   logBodies,
 	}
 }
 

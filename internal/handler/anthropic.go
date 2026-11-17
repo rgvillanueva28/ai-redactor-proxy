@@ -47,6 +47,7 @@ type AnthropicHandler struct {
 	redactor    *pii.Redactor
 	unredactor  *pii.Unredactor
 	logRedacted bool
+	logBodies   bool
 }
 
 // Compile-time assertions that AnthropicHandler satisfies the proxy contracts.
@@ -57,9 +58,11 @@ var (
 
 // NewAnthropicHandler returns a handler that redacts with r and unredacts with u.
 // A nil redactor or unredactor disables that direction of the transformation.
-// When logRedacted is true every redacted item is logged at info level.
-func NewAnthropicHandler(r *pii.Redactor, u *pii.Unredactor, logRedacted bool) *AnthropicHandler {
-	return &AnthropicHandler{redactor: r, unredactor: u, logRedacted: logRedacted}
+// When logRedacted is true every redacted item is logged at info level. When
+// logBodies is true every request, response and stream chunk body is logged at
+// debug level, before and after the transformation.
+func NewAnthropicHandler(r *pii.Redactor, u *pii.Unredactor, logRedacted bool, logBodies bool) *AnthropicHandler {
+	return &AnthropicHandler{redactor: r, unredactor: u, logRedacted: logRedacted, logBodies: logBodies}
 }
 
 // MutateRequest redacts system (string or array of text blocks) and
@@ -69,7 +72,13 @@ func (h *AnthropicHandler) MutateRequest(ctx context.Context, req *http.Request,
 	if h == nil {
 		return body, nil
 	}
-	return redactBody(req, body, h.redactor, anthropicRequestFields, h.logRedacted)
+	out, err := redactBody(req, body, h.redactor, anthropicRequestFields, h.logRedacted)
+	if err != nil {
+		return nil, err
+	}
+	logBody(h.logBodies, "request body (original)", body)
+	logBody(h.logBodies, "request body (redacted)", out)
+	return out, nil
 }
 
 // MutateResponse restores placeholders in content[].text.
@@ -77,7 +86,13 @@ func (h *AnthropicHandler) MutateResponse(ctx context.Context, resp *http.Respon
 	if h == nil {
 		return body, nil
 	}
-	return unredactBody(ctx, resp, body, h.unredactor, anthropicResponseFields)
+	out, err := unredactBody(ctx, resp, body, h.unredactor, anthropicResponseFields)
+	if err != nil {
+		return nil, err
+	}
+	logBody(h.logBodies, "response body (redacted)", body)
+	logBody(h.logBodies, "response body (unredacted)", out)
+	return out, nil
 }
 
 // MutateStreamChunk restores placeholders in one SSE event's
