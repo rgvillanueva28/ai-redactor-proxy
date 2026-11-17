@@ -28,7 +28,7 @@ const sseDoneSentinel = "[DONE]"
 // Bodies that are empty, not JSON, or have no selected leaves are returned
 // unchanged so non-JSON endpoints keep working.
 func redactBody(req *http.Request, body []byte, r *pii.Redactor, fields fieldSet, logRedacted bool) ([]byte, error) {
-	if len(body) == 0 || r == nil || len(fields) == 0 {
+	if len(body) == 0 || r == nil || fields.isEmpty() {
 		return body, nil
 	}
 	if !json.Valid(body) {
@@ -121,7 +121,7 @@ func logBody(enabled bool, msg string, body []byte) {
 // any value a request mutator attached. A missing mapping, an empty body, a
 // non-JSON body, or a body with no selected leaves is passed through unchanged.
 func unredactBody(ctx context.Context, resp *http.Response, body []byte, u *pii.Unredactor, fields fieldSet) ([]byte, error) {
-	if len(body) == 0 || u == nil || len(fields) == 0 {
+	if len(body) == 0 || u == nil || fields.isEmpty() {
 		return body, nil
 	}
 	m := mappingFromContext(ctx)
@@ -205,7 +205,7 @@ func unredactFieldsWithState(body []byte, m *pii.Mapping, u *pii.Unredactor, fie
 // of a chunk (for example "<EMAIL" or "<EMAIL_1") is held back and prepended to
 // the next chunk's text, so a placeholder split across tokens is still restored.
 func unredactSSEEvent(ctx context.Context, chunk []byte, u *pii.Unredactor, fields fieldSet) ([]byte, error) {
-	if len(chunk) == 0 || u == nil || len(fields) == 0 {
+	if len(chunk) == 0 || u == nil || fields.isEmpty() {
 		return chunk, nil
 	}
 	m := mappingFromContext(ctx)

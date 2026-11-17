@@ -12,25 +12,47 @@ import (
 // dialect:
 //
 //	{"system": "..." | [{"type":"text","text":"..."}],
-//	 "messages":[{"content":"..."} | [{"type":"text","text":"..."}]]}
-var anthropicRequestFields = newFieldSet(
-	[]string{"messages", "content"},
-	[]string{"messages", "content", "text"},
-	[]string{"system"},
-	[]string{"system", "text"},
+//	 "messages":[{"content":"..."} |
+//	             [{"type":"text","text":"..."},
+//	              {"type":"tool_use","input":{...}},
+//	              {"type":"tool_result","content":"..." | [{"type":"text","text":"..."}]}]]}
+//
+// tool_use.input is an arbitrary JSON object chosen by the model, so it is
+// walked as a subtree: every string leaf inside it is redacted. thinking and
+// redacted_thinking blocks carry "thinking"/"signature" instead of "text", so
+// they are untouched.
+var anthropicRequestFields = mergeFieldSets(
+	newFieldSet(
+		[]string{"messages", "content"},
+		[]string{"messages", "content", "text"},
+		[]string{"messages", "content", "content"},
+		[]string{"messages", "content", "content", "text"},
+		[]string{"system"},
+		[]string{"system", "text"},
+	),
+	newSubtreeFieldSet(
+		[]string{"messages", "content", "input"},
+	),
 )
 
 // anthropicResponseFields are the buffered Messages response leaves:
-// content[].text. Non-text blocks (tool_use input, thinking signatures) are
-// left alone.
-var anthropicResponseFields = newFieldSet(
-	[]string{"content", "text"},
+// content[].text, plus every string leaf of a tool_use block's input. Thinking
+// blocks and tool signatures are left alone.
+var anthropicResponseFields = mergeFieldSets(
+	newFieldSet(
+		[]string{"content", "text"},
+	),
+	newSubtreeFieldSet(
+		[]string{"content", "input"},
+	),
 )
 
 // anthropicStreamFields are the streaming Messages delta leaves:
-// content_block_delta.delta.text.
+// content_block_delta.delta.text and the input_json_delta partial_json payload,
+// which carries a fragment of the tool_use input as a JSON-encoded string.
 var anthropicStreamFields = newFieldSet(
 	[]string{"delta", "text"},
+	[]string{"delta", "partial_json"},
 )
 
 // AnthropicHandler redacts Anthropic Messages API requests and unredacts the

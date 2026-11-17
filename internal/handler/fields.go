@@ -25,29 +25,88 @@ import (
 // path are touched, so fields that merely happen to contain PII (tool
 // definitions, image URLs, metadata) survive untouched — the upstream API
 // expects them verbatim.
-type fieldSet map[string]struct{}
+//
+// A path is either exact, meaning only a string leaf at exactly that path is
+// rewritten, or a subtree, meaning every string leaf anywhere beneath that path
+// is rewritten. Subtrees exist for tool call payloads whose shape is chosen by
+// the model rather than the API: tool_use.input, functionCall.args and
+// functionResponse.response are arbitrary JSON objects, so no fixed set of leaf
+// paths can name their contents.
+type fieldSet struct {
+	exact    map[string]struct{}
+	subtrees map[string]struct{}
+}
 
 // pathSep separates the object keys in an encoded field path. A NUL byte
 // cannot appear in a JSON object key in practice, so the encoding is
 // unambiguous.
 const pathSep = "\x00"
 
-// newFieldSet builds a fieldSet from the given key paths.
+// newFieldSet builds a fieldSet of exact key paths.
 func newFieldSet(paths ...[]string) fieldSet {
-	set := make(fieldSet, len(paths))
+	set := fieldSet{
+		exact:    make(map[string]struct{}, len(paths)),
+		subtrees: make(map[string]struct{}),
+	}
 	for _, p := range paths {
-		set[strings.Join(p, pathSep)] = struct{}{}
+		set.exact[strings.Join(p, pathSep)] = struct{}{}
 	}
 	return set
 }
 
-// contains reports whether path is one of the selected leaves.
+// newSubtreeFieldSet builds a fieldSet whose paths select every string leaf
+// beneath them, at any depth. Object keys are never selected.
+func newSubtreeFieldSet(paths ...[]string) fieldSet {
+	set := fieldSet{
+		exact:    make(map[string]struct{}),
+		subtrees: make(map[string]struct{}, len(paths)),
+	}
+	for _, p := range paths {
+		set.subtrees[strings.Join(p, pathSep)] = struct{}{}
+	}
+	return set
+}
+
+// mergeFieldSets combines the exact and subtree paths of several field sets.
+func mergeFieldSets(sets ...fieldSet) fieldSet {
+	merged := fieldSet{
+		exact:    make(map[string]struct{}),
+		subtrees: make(map[string]struct{}),
+	}
+	for _, s := range sets {
+		for k := range s.exact {
+			merged.exact[k] = struct{}{}
+		}
+		for k := range s.subtrees {
+			merged.subtrees[k] = struct{}{}
+		}
+	}
+	return merged
+}
+
+// contains reports whether path is one of the selected exact leaves.
 func (f fieldSet) contains(path []string) bool {
-	if len(f) == 0 {
+	if len(f.exact) == 0 {
 		return false
 	}
-	_, ok := f[strings.Join(path, pathSep)]
+	_, ok := f.exact[strings.Join(path, pathSep)]
 	return ok
+}
+
+// isSubtreeRoot reports whether path is registered as a subtree root. The
+// walker uses it when entering a container to start selecting every string leaf
+// beneath it.
+func (f fieldSet) isSubtreeRoot(path []string) bool {
+	if len(f.subtrees) == 0 {
+		return false
+	}
+	_, ok := f.subtrees[strings.Join(path, pathSep)]
+	return ok
+}
+
+// isEmpty reports whether the set selects nothing at all.
+func (f fieldSet) isEmpty() bool {
+	return len(f.exact) == 0 && len(f.subtrees) == 0
 }
 
 // walkFields parses src as JSON, applies cb to every string leaf selected by
@@ -105,6 +164,9 @@ type fieldWalker struct {
 	cb     StringCallback
 	fields fieldSet
 	path   []string
+	// subtreeDepth counts the subtree roots currently being walked. When it is
+	// non-zero every string leaf is selected, at any depth.
+	subtreeDepth int
 }
 
 // value writes tok and, for a container, everything nested in it.
@@ -113,14 +175,30 @@ func (w *fieldWalker) value(tok json.Token) error {
 	case json.Delim:
 		switch v {
 		case '{':
-			return w.object()
+			enter := w.fields.isSubtreeRoot(w.path)
+			if enter {
+				w.subtreeDepth++
+			}
+			err := w.object()
+			if enter {
+				w.subtreeDepth--
+			}
+			return err
 		case '[':
-			return w.array()
+			enter := w.fields.isSubtreeRoot(w.path)
+			if enter {
+				w.subtreeDepth++
+			}
+			err := w.array()
+			if enter {
+				w.subtreeDepth--
+			}
+			return err
 		default:
 			return fmt.Errorf("unexpected delimiter %q", v)
 		}
 	case string:
-		if !w.fields.contains(w.path) {
+		if !w.fields.contains(w.path) && w.subtreeDepth == 0 {
 			return w.writeString(v)
 		}
 		s, err := w.cb(v)

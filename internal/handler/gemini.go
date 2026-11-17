@@ -14,16 +14,34 @@ import (
 // geminiRequestFields are the request leaves that carry text in the Gemini
 // generateContent dialect:
 //
-//	{"contents":[{"parts":[{"text":"..."}]}],
+//	{"contents":[{"parts":[{"text":"..."},
+//	                       {"functionCall":{"args":{...}}},
+//	                       {"functionResponse":{"response":{...}}}]}],
 //	 "systemInstruction":{"parts":[{"text":"..."}]}}
-var geminiRequestFields = newFieldSet(
-	[]string{"contents", "parts", "text"},
-	[]string{"systemInstruction", "parts", "text"},
+//
+// functionCall.args and functionResponse.response are arbitrary JSON objects, so
+// they are walked as subtrees: every string leaf inside them is redacted.
+var geminiRequestFields = mergeFieldSets(
+	newFieldSet(
+		[]string{"contents", "parts", "text"},
+		[]string{"systemInstruction", "parts", "text"},
+	),
+	newSubtreeFieldSet(
+		[]string{"contents", "parts", "functionCall", "args"},
+		[]string{"contents", "parts", "functionResponse", "response"},
+	),
 )
 
-// geminiResponseFields are the response leaves: candidates[].content.parts[].text.
-var geminiResponseFields = newFieldSet(
-	[]string{"candidates", "content", "parts", "text"},
+// geminiResponseFields are the response leaves:
+// candidates[].content.parts[].text plus every string leaf of a functionCall's
+// args object.
+var geminiResponseFields = mergeFieldSets(
+	newFieldSet(
+		[]string{"candidates", "content", "parts", "text"},
+	),
+	newSubtreeFieldSet(
+		[]string{"candidates", "content", "parts", "functionCall", "args"},
+	),
 )
 
 // GeminiHandler redacts Google Gemini generateContent requests and unredacts

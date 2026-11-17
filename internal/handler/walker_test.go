@@ -212,6 +212,80 @@ func TestWalkJSON_PreservesKeyOrder(t *testing.T) {
 	}
 }
 
+// TestWalkFields_Subtree covers the subtree selector: a path registered as a
+// subtree has every string leaf beneath it walked, at any depth, while object
+// keys and unrelated paths are left alone.
+func TestWalkFields_Subtree(t *testing.T) {
+	fields := mergeFieldSets(
+		newFieldSet([]string{"keep"}),
+		newSubtreeFieldSet([]string{"tool", "input"}),
+	)
+
+	t.Run("nested objects", func(t *testing.T) {
+		src := []byte(`{"tool":{"input":{"cmd":"alice@example.com","opts":{"user":"bob@x.com"}}},"keep":"alice@example.com","other":"carol@x.com"}`)
+		want := `{"tool":{"input":{"cmd":"ALICE@EXAMPLE.COM","opts":{"user":"BOB@X.COM"}}},"keep":"ALICE@EXAMPLE.COM","other":"carol@x.com"}`
+		got, err := walkFields(src, fields, upper)
+		if err != nil {
+			t.Fatalf("walkFields: %v", err)
+		}
+		if string(got) != want {
+			t.Fatalf("walkFields = %s, want %s", got, want)
+		}
+	})
+
+	t.Run("arrays inside subtree", func(t *testing.T) {
+		src := []byte(`{"tool":{"input":[{"text":"alice@example.com"},{"text":"bob@x.com"}]},"other":"alice@example.com"}`)
+		want := `{"tool":{"input":[{"text":"ALICE@EXAMPLE.COM"},{"text":"BOB@X.COM"}]},"other":"alice@example.com"}`
+		got, err := walkFields(src, fields, upper)
+		if err != nil {
+			t.Fatalf("walkFields: %v", err)
+		}
+		if string(got) != want {
+			t.Fatalf("walkFields = %s, want %s", got, want)
+		}
+	})
+
+	t.Run("object keys are never rewritten", func(t *testing.T) {
+		src := []byte(`{"tool":{"input":{"alice@example.com":"value"}}}`)
+		want := `{"tool":{"input":{"alice@example.com":"VALUE"}}}`
+		got, err := walkFields(src, fields, upper)
+		if err != nil {
+			t.Fatalf("walkFields: %v", err)
+		}
+		if string(got) != want {
+			t.Fatalf("walkFields = %s, want %s", got, want)
+		}
+	})
+
+	t.Run("subtree root that is not a container selects nothing", func(t *testing.T) {
+		// Only containers enter the subtree: a scalar at the root path is
+		// matched by an exact path or not at all.
+		src := []byte(`{"tool":{"input":"alice@example.com"}}`)
+		got, err := walkFields(src, fields, upper)
+		if err != nil {
+			t.Fatalf("walkFields: %v", err)
+		}
+		if !bytes.Equal(got, src) {
+			t.Fatalf("walkFields = %s, want %s", got, src)
+		}
+	})
+
+	t.Run("empty subtree set selects nothing", func(t *testing.T) {
+		empty := newSubtreeFieldSet()
+		if !empty.isEmpty() {
+			t.Fatal("newSubtreeFieldSet() is not empty")
+		}
+		src := []byte(`{"a":"x"}`)
+		got, err := walkFields(src, empty, upper)
+		if err != nil {
+			t.Fatalf("walkFields: %v", err)
+		}
+		if !bytes.Equal(got, src) {
+			t.Fatalf("walkFields = %s, want %s", got, src)
+		}
+	})
+}
+
 func TestWalkJSON_DeeplyNestedArray(t *testing.T) {
 	src := []byte(`[[["deep"]]]`)
 	got, err := WalkJSON(src, upper)

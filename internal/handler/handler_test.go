@@ -56,6 +56,17 @@ func mutateProviderRequest(t *testing.T, h proxy.RequestMutator, src []byte) (*p
 	return m, got
 }
 
+// mappingValues returns the set of original values recorded in m, which lets a
+// test assert what was redacted without depending on placeholder numbering.
+func mappingValues(m *pii.Mapping) map[string]bool {
+	all := m.All()
+	vals := make(map[string]bool, len(all))
+	for _, v := range all {
+		vals[v] = true
+	}
+	return vals
+}
+
 // jsonResponse is a plain buffered upstream response for MutateResponse.
 func jsonResponse() *http.Response {
 	return &http.Response{
@@ -118,6 +129,38 @@ func TestOpenAI_MutateRequest_UniquePlaceholdersAcrossMessages(t *testing.T) {
 	_, got := mutateProviderRequest(t, h, src)
 	if string(got) != want {
 		t.Fatalf("redacted body = %s, want %s", got, want)
+	}
+}
+
+// TestOpenAI_MutateRequest_ToolCalls covers tool call arguments in the request
+// history. OpenAI encodes them as a JSON string, so the whole arguments payload
+// is one string leaf.
+func TestOpenAI_MutateRequest_ToolCalls(t *testing.T) {
+	reg := newProviderRegistry(t)
+	h := NewOpenAIHandler(reg.Redactor(), reg.Unredactor(), false, false)
+
+	src := []byte(`{"messages":[` +
+		`{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"send","arguments":"{\"to\":\"alice.smith@example.com\",\"amount\":100}"}}]},` +
+		`{"role":"tool","tool_call_id":"call_1","content":"delivered to 4111 1111 1111 1111"}]}`)
+
+	m, got := mutateProviderRequest(t, h, src)
+
+	for _, leaked := range []string{"alice.smith@example.com", "4111 1111 1111 1111"} {
+		if bytes.Contains(got, []byte(leaked)) {
+			t.Errorf("redacted body still contains %q: %s", leaked, got)
+		}
+	}
+	// The function name and the non-string argument survive untouched.
+	for _, keep := range []string{`"name":"send"`, `\"amount\":100`, `"content":null`} {
+		if !bytes.Contains(got, []byte(keep)) {
+			t.Errorf("redacted body lost %s: %s", keep, got)
+		}
+	}
+	vals := mappingValues(m)
+	for _, wantVal := range []string{"alice.smith@example.com", "4111 1111 1111 1111"} {
+		if !vals[wantVal] {
+			t.Errorf("mapping is missing %q: %v", wantVal, vals)
+		}
 	}
 }
 
@@ -198,6 +241,27 @@ func TestOpenAI_MutateResponse_FallsBackToRequestContext(t *testing.T) {
 	}
 	if want := `{"choices":[{"message":{"content":"a@b.com"}}]}`; string(got) != want {
 		t.Fatalf("MutateResponse = %s, want %s", got, want)
+	}
+}
+
+// TestOpenAI_MutateResponse_ToolCalls verifies placeholders in a buffered
+// response's tool_calls[].function.arguments are restored.
+func TestOpenAI_MutateResponse_ToolCalls(t *testing.T) {
+	reg := newProviderRegistry(t)
+	h := NewOpenAIHandler(reg.Redactor(), reg.Unredactor(), false, false)
+
+	m, _ := mutateProviderRequest(t, h, []byte(`{"messages":[{"role":"user","content":"Email alice.smith@example.com"}]}`))
+	ctx := contextWithMapping(context.Background(), m)
+
+	body := []byte(`{"choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"send","arguments":"{\"to\":\"<EMAIL_1>\"}"}}]},"finish_reason":"tool_calls"}]}`)
+	want := `{"choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"send","arguments":"{\"to\":\"alice.smith@example.com\"}"}}]},"finish_reason":"tool_calls"}]}`
+
+	got, err := h.MutateResponse(ctx, jsonResponse(), body)
+	if err != nil {
+		t.Fatalf("MutateResponse: %v", err)
+	}
+	if string(got) != want {
+		t.Fatalf("unredacted body = %s, want %s", got, want)
 	}
 }
 
@@ -332,6 +396,27 @@ func sseOpenAIDelta(t *testing.T, chunk []byte) string {
 		return ""
 	}
 	return v.Choices[0].Delta.Content
+}
+
+// TestOpenAI_MutateStreamChunk_ToolCalls verifies a streamed tool call's
+// arguments fragment is unredacted.
+func TestOpenAI_MutateStreamChunk_ToolCalls(t *testing.T) {
+	reg := newProviderRegistry(t)
+	h := NewOpenAIHandler(reg.Redactor(), reg.Unredactor(), false, false)
+
+	m, _ := mutateProviderRequest(t, h, []byte(`{"messages":[{"role":"user","content":"Email alice.smith@example.com"}]}`))
+	ctx := contextWithMapping(context.Background(), m)
+
+	chunk := []byte(`data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"send","arguments":"{\"to\":\"<EMAIL_1>\"}"}}]}}]}` + "\n\n")
+	want := `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"send","arguments":"{\"to\":\"alice.smith@example.com\"}"}}]}}]}` + "\n\n"
+
+	got, err := h.MutateStreamChunk(ctx, chunk, "text/event-stream")
+	if err != nil {
+		t.Fatalf("MutateStreamChunk: %v", err)
+	}
+	if string(got) != want {
+		t.Fatalf("MutateStreamChunk = %q, want %q", got, want)
+	}
 }
 
 // TestOpenAI_MutateStreamChunk_SplitPlaceholder feeds a placeholder token by
@@ -498,6 +583,48 @@ func TestAnthropic_MutateRequest_SystemArray(t *testing.T) {
 	}
 }
 
+// TestAnthropic_MutateRequest_ToolResultAndToolUse covers the two shapes tool
+// blocks take in the request history: a tool_use block's arbitrary input object
+// and a tool_result block's content (a bare string or an array of text blocks).
+func TestAnthropic_MutateRequest_ToolResultAndToolUse(t *testing.T) {
+	reg := newProviderRegistry(t)
+	h := NewAnthropicHandler(reg.Redactor(), reg.Unredactor(), false, false)
+
+	src := []byte(`{"messages":[` +
+		`{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"send","input":{"to":"alice.smith@example.com","opts":{"region":"us","tries":3},"urgent":true}}]},` +
+		`{"role":"user","content":[` +
+		`{"type":"tool_result","tool_use_id":"toolu_1","content":"charged 4111 1111 1111 1111"},` +
+		`{"type":"tool_result","tool_use_id":"toolu_2","content":[{"type":"text","text":"now call +1 415-555-2671"}]}]}]}`)
+
+	m, got := mutateProviderRequest(t, h, src)
+
+	for _, leaked := range []string{"alice.smith@example.com", "4111 1111 1111 1111", "+1 415-555-2671"} {
+		if bytes.Contains(got, []byte(leaked)) {
+			t.Errorf("redacted body still contains %q: %s", leaked, got)
+		}
+	}
+	// Everything that is not PII survives, including the tool_use envelope and
+	// non-string leaves inside the subtree.
+	for _, keep := range []string{
+		`"id":"toolu_1"`,
+		`"name":"send"`,
+		`"tool_use_id":"toolu_2"`,
+		`"region":"us"`,
+		`"tries":3`,
+		`"urgent":true`,
+	} {
+		if !bytes.Contains(got, []byte(keep)) {
+			t.Errorf("redacted body lost %s: %s", keep, got)
+		}
+	}
+	vals := mappingValues(m)
+	for _, wantVal := range []string{"alice.smith@example.com", "4111 1111 1111 1111", "+1 415-555-2671"} {
+		if !vals[wantVal] {
+			t.Errorf("mapping is missing %q: %v", wantVal, vals)
+		}
+	}
+}
+
 func TestAnthropic_MutateRequest_PassThrough(t *testing.T) {
 	h := NewAnthropicHandler(nil, nil, false, false)
 
@@ -544,6 +671,32 @@ func TestAnthropic_MutateResponse(t *testing.T) {
 	// tool_use blocks are not text leaves and stay intact.
 	if !bytes.Contains(got, []byte(`"tool_use"`)) || !bytes.Contains(got, []byte(`"query":"card lookup"`)) {
 		t.Errorf("tool_use block was not preserved: %s", got)
+	}
+}
+
+// TestAnthropic_MutateResponse_ToolUse verifies placeholders inside a tool_use
+// block's input are restored — including nested objects and arrays — while
+// thinking blocks and non-string leaves are left alone.
+func TestAnthropic_MutateResponse_ToolUse(t *testing.T) {
+	reg := newProviderRegistry(t)
+	h := NewAnthropicHandler(reg.Redactor(), reg.Unredactor(), false, false)
+
+	m, _ := mutateProviderRequest(t, h, []byte(`{"messages":[{"role":"user","content":"Email alice.smith@example.com"}]}`))
+	ctx := contextWithMapping(context.Background(), m)
+
+	body := []byte(`{"content":[` +
+		`{"type":"thinking","thinking":"private <EMAIL_1>","signature":"sig"},` +
+		`{"type":"tool_use","id":"toolu_1","name":"send","input":{"to":"<EMAIL_1>","meta":{"cc":["<EMAIL_1>"],"count":2},"enabled":true}}]}`)
+	want := `{"content":[` +
+		`{"type":"thinking","thinking":"private <EMAIL_1>","signature":"sig"},` +
+		`{"type":"tool_use","id":"toolu_1","name":"send","input":{"to":"alice.smith@example.com","meta":{"cc":["alice.smith@example.com"],"count":2},"enabled":true}}]}`
+
+	got, err := h.MutateResponse(ctx, jsonResponse(), body)
+	if err != nil {
+		t.Fatalf("MutateResponse: %v", err)
+	}
+	if string(got) != want {
+		t.Fatalf("unredacted body = %s, want %s", got, want)
 	}
 }
 
@@ -636,6 +789,30 @@ func TestAnthropic_MutateStreamChunk(t *testing.T) {
 	})
 }
 
+// TestAnthropic_MutateStreamChunk_InputJsonDelta verifies the tool_use argument
+// stream: an input_json_delta event carries a fragment of the input object in
+// the JSON-encoded partial_json string, which must be unredacted in place.
+func TestAnthropic_MutateStreamChunk_InputJsonDelta(t *testing.T) {
+	reg := newProviderRegistry(t)
+	h := NewAnthropicHandler(reg.Redactor(), reg.Unredactor(), false, false)
+
+	m, _ := mutateProviderRequest(t, h, []byte(`{"messages":[{"role":"user","content":"Email alice.smith@example.com"}]}`))
+	ctx := contextWithMapping(context.Background(), m)
+
+	chunk := []byte(`event: content_block_delta` + "\n" +
+		`data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"to\":\"<EMAIL_1>\"}"}}` + "\n\n")
+	want := `event: content_block_delta` + "\n" +
+		`data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"to\":\"alice.smith@example.com\"}"}}` + "\n\n"
+
+	got, err := h.MutateStreamChunk(ctx, chunk, "text/event-stream")
+	if err != nil {
+		t.Fatalf("MutateStreamChunk: %v", err)
+	}
+	if string(got) != want {
+		t.Fatalf("MutateStreamChunk = %q, want %q", got, want)
+	}
+}
+
 func TestGemini_MutateRequest(t *testing.T) {
 	reg := newProviderRegistry(t)
 	h := NewGeminiHandler(reg.Redactor(), reg.Unredactor(), false, false)
@@ -669,6 +846,60 @@ func TestGemini_MutateRequest(t *testing.T) {
 	} {
 		if !bytes.Contains(got, []byte(keep)) {
 			t.Errorf("redacted body lost %s: %s", keep, got)
+		}
+	}
+}
+
+// TestGemini_MutateRequest_FunctionCall covers functionCall.args: an arbitrary
+// JSON object, walked as a subtree.
+func TestGemini_MutateRequest_FunctionCall(t *testing.T) {
+	reg := newProviderRegistry(t)
+	h := NewGeminiHandler(reg.Redactor(), reg.Unredactor(), false, false)
+
+	src := []byte(`{"contents":[{"role":"model","parts":[{"functionCall":{"name":"send","args":{"to":"alice.smith@example.com","meta":{"cc":["+1 415-555-2671"],"count":2},"ok":true}}}]}]}`)
+
+	m, got := mutateProviderRequest(t, h, src)
+
+	for _, leaked := range []string{"alice.smith@example.com", "+1 415-555-2671"} {
+		if bytes.Contains(got, []byte(leaked)) {
+			t.Errorf("redacted body still contains %q: %s", leaked, got)
+		}
+	}
+	for _, keep := range []string{`"name":"send"`, `"count":2`, `"ok":true`} {
+		if !bytes.Contains(got, []byte(keep)) {
+			t.Errorf("redacted body lost %s: %s", keep, got)
+		}
+	}
+	vals := mappingValues(m)
+	for _, wantVal := range []string{"alice.smith@example.com", "+1 415-555-2671"} {
+		if !vals[wantVal] {
+			t.Errorf("mapping is missing %q: %v", wantVal, vals)
+		}
+	}
+}
+
+// TestGemini_MutateRequest_FunctionResponse covers functionResponse.response,
+// which carries the tool's output back to the model as an arbitrary object.
+func TestGemini_MutateRequest_FunctionResponse(t *testing.T) {
+	reg := newProviderRegistry(t)
+	h := NewGeminiHandler(reg.Redactor(), reg.Unredactor(), false, false)
+
+	src := []byte(`{"contents":[{"role":"user","parts":[{"functionResponse":{"name":"lookup","response":{"email":"alice.smith@example.com","nested":{"values":["4111 1111 1111 1111"]}}}}]}]}`)
+
+	m, got := mutateProviderRequest(t, h, src)
+
+	for _, leaked := range []string{"alice.smith@example.com", "4111 1111 1111 1111"} {
+		if bytes.Contains(got, []byte(leaked)) {
+			t.Errorf("redacted body still contains %q: %s", leaked, got)
+		}
+	}
+	if !bytes.Contains(got, []byte(`"name":"lookup"`)) {
+		t.Errorf("redacted body lost the function name: %s", got)
+	}
+	vals := mappingValues(m)
+	for _, wantVal := range []string{"alice.smith@example.com", "4111 1111 1111 1111"} {
+		if !vals[wantVal] {
+			t.Errorf("mapping is missing %q: %v", wantVal, vals)
 		}
 	}
 }
@@ -713,6 +944,27 @@ func TestGemini_MutateResponse(t *testing.T) {
 	}
 	if bytes.Contains(got, []byte("<EMAIL_1>")) || bytes.Contains(got, []byte("<PHONE_1>")) {
 		t.Errorf("unredacted body still contains a placeholder: %s", got)
+	}
+}
+
+// TestGemini_MutateResponse_FunctionCall verifies placeholders inside a
+// functionCall's args object are restored in a buffered response.
+func TestGemini_MutateResponse_FunctionCall(t *testing.T) {
+	reg := newProviderRegistry(t)
+	h := NewGeminiHandler(reg.Redactor(), reg.Unredactor(), false, false)
+
+	m, _ := mutateProviderRequest(t, h, []byte(`{"contents":[{"parts":[{"text":"Email alice.smith@example.com"}]}]}`))
+	ctx := contextWithMapping(context.Background(), m)
+
+	body := []byte(`{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"send","args":{"to":"<EMAIL_1>","meta":{"cc":["<EMAIL_1>"],"count":2}}}}]},"finishReason":"STOP","index":0}]}`)
+	want := `{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"send","args":{"to":"alice.smith@example.com","meta":{"cc":["alice.smith@example.com"],"count":2}}}}]},"finishReason":"STOP","index":0}]}`
+
+	got, err := h.MutateResponse(ctx, jsonResponse(), body)
+	if err != nil {
+		t.Fatalf("MutateResponse: %v", err)
+	}
+	if string(got) != want {
+		t.Fatalf("unredacted body = %s, want %s", got, want)
 	}
 }
 

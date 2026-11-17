@@ -12,22 +12,31 @@ import (
 // Chat Completions dialect:
 //
 //	{"messages":[{"content":"..."},                    // string content
-//	             {"content":[{"type":"text","text":"..."}]}]}  // content parts
+//	             {"content":[{"type":"text","text":"..."}]},  // content parts
+//	             {"tool_calls":[{"function":{"arguments":"..."}}]}]}  // history
+//
+// OpenAI encodes tool call arguments as a JSON string within a string field, so
+// they need no subtree walk: the whole arguments payload is one string leaf.
+// Tool results come back as role "tool" messages whose content is a plain string,
+// already covered by messages.content.
 var openAIRequestFields = newFieldSet(
 	[]string{"messages", "content"},
 	[]string{"messages", "content", "text"},
+	[]string{"messages", "tool_calls", "function", "arguments"},
 )
 
 // openAIResponseFields are the buffered Chat Completions response leaves:
-// choices[].message.content.
+// choices[].message.content and choices[].message.tool_calls[].function.arguments.
 var openAIResponseFields = newFieldSet(
 	[]string{"choices", "message", "content"},
+	[]string{"choices", "message", "tool_calls", "function", "arguments"},
 )
 
 // openAIStreamFields are the streaming Chat Completions delta leaves:
-// choices[].delta.content.
+// choices[].delta.content and choices[].delta.tool_calls[].function.arguments.
 var openAIStreamFields = newFieldSet(
 	[]string{"choices", "delta", "content"},
+	[]string{"choices", "delta", "tool_calls", "function", "arguments"},
 )
 
 // OpenAIHandler redacts OpenAI Chat Completions requests and unredacts the
