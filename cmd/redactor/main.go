@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/local/redactor/internal/config"
@@ -35,6 +36,14 @@ func main() {
 			slog.Error("failed to load config", "path", *configPath, "error", err)
 			os.Exit(1)
 		}
+	} else if localConfig := findLocalConfig(); localConfig != "" {
+		var err error
+		cfg, err = config.Load(localConfig)
+		if err != nil {
+			slog.Error("failed to load config", "path", localConfig, "error", err)
+			os.Exit(1)
+		}
+		slog.Info("loaded config from current directory", "path", localConfig)
 	} else {
 		cfg = config.DefaultConfig()
 	}
@@ -73,6 +82,15 @@ func main() {
 		os.Exit(1)
 	}
 	slog.Info("server shut down cleanly")
+}
+
+// findLocalConfig checks for config.toml in the current directory.
+func findLocalConfig() string {
+	path := filepath.Join(".", "config.toml")
+	if _, err := os.Stat(path); err == nil {
+		return path
+	}
+	return ""
 }
 
 // newMux builds the proxy's HTTP mux: /healthz answers liveness checks and
