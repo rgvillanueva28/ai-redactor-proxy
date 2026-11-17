@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/local/redactor/internal/pii"
 	"github.com/local/redactor/internal/proxy"
@@ -30,8 +31,9 @@ var geminiResponseFields = newFieldSet(
 //
 // Gemini differs from OpenAI and Anthropic in two ways that the handler has to
 // respect: text always lives inside a "parts" array element (mixed with
-// inlineData/functionCall parts that must not change), and the streaming
-// endpoint returns newline-delimited JSON objects rather than SSE frames.
+// inlineData/functionCall parts that must not change), and the classic
+// streaming endpoint returns newline-delimited JSON objects rather than SSE
+// frames (the SSE-flavoured streaming endpoint still needs SSE unwrapping).
 //
 // A GeminiHandler is stateless and safe for concurrent use.
 type GeminiHandler struct {
@@ -71,11 +73,17 @@ func (h *GeminiHandler) MutateResponse(ctx context.Context, resp *http.Response,
 
 // MutateStreamChunk restores placeholders in Gemini's streaming response.
 //
-// Gemini streams newline-delimited JSON: each line is a complete
-// GenerateContentResponse, and the Content-Type is application/json rather than
-// text/event-stream. A chunk that is a single complete JSON document is walked
-// as a buffered body; a chunk with several lines is walked line by line. Lines
-// that are blank or not JSON are copied through with their original framing.
+// Gemini has two streaming shapes. Its classic endpoint streams
+// newline-delimited JSON: each line is a complete GenerateContentResponse and
+// the Content-Type is application/json rather than text/event-stream. A chunk
+// from that endpoint that is a single complete JSON document is walked as a
+// buffered body; a chunk with several lines is walked line by line. Lines that
+// are blank or not JSON are copied through with their original framing.
+//
+// The newer SSE-flavoured streaming endpoint sends data: frames, which the
+// proxy hands over as one serialised event per call. Those need the same
+// SSE-aware unwrapping OpenAI and Anthropic use; treating the framing as JSON
+// would make the chunk look invalid and leak placeholders to the client.
 func (h *GeminiHandler) MutateStreamChunk(ctx context.Context, chunk []byte, contentType string) ([]byte, error) {
 	if h == nil || len(chunk) == 0 || h.unredactor == nil {
 		return chunk, nil
@@ -83,6 +91,10 @@ func (h *GeminiHandler) MutateStreamChunk(ctx context.Context, chunk []byte, con
 	m := mappingFromContext(ctx)
 	if m == nil {
 		return chunk, nil
+	}
+
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(contentType)), "text/event-stream") {
+		return unredactSSEEvent(ctx, chunk, h.unredactor, geminiResponseFields)
 	}
 
 	// Whole-chunk JSON is the common case for a single streamed line (and for

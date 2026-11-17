@@ -204,6 +204,11 @@ func TestAdapter_MutateStreamChunk_Dispatch(t *testing.T) {
 	const anthropicWant = "event: content_block_delta\n" +
 		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Email alice.smith@example.com for the receipt."}}` + "\n\n"
 
+	const geminiSSEChunk = "event: message\n" +
+		`data: {"candidates":[{"content":{"parts":[{"text":"Email <EMAIL_1>."}]}}]}` + "\n\n"
+	const geminiSSEWant = "event: message\n" +
+		`data: {"candidates":[{"content":{"parts":[{"text":"Email alice.smith@example.com."}]}}]}` + "\n\n"
+
 	cases := []struct {
 		name        string
 		provider    proxy.Provider
@@ -229,12 +234,23 @@ func TestAdapter_MutateStreamChunk_Dispatch(t *testing.T) {
 			contentType: "text/event-stream",
 		},
 		{
+			// The classic streaming endpoint: newline-delimited JSON, not SSE.
 			name:        "gemini",
 			provider:    proxy.ProviderGemini,
 			request:     "gemini_request.json",
 			chunk:       []byte(`{"candidates":[{"content":{"parts":[{"text":"Email <EMAIL_1>."}]}}]}`),
 			want:        []byte(`{"candidates":[{"content":{"parts":[{"text":"Email alice.smith@example.com."}]}}]}`),
 			contentType: "application/json",
+		},
+		{
+			// The SSE-flavoured streaming endpoint: same payload, wrapped in
+			// "event:"/"data:" framing.
+			name:        "gemini sse",
+			provider:    proxy.ProviderGemini,
+			request:     "gemini_request.json",
+			chunk:       []byte(geminiSSEChunk),
+			want:        []byte(geminiSSEWant),
+			contentType: "text/event-stream",
 		},
 		{
 			name:        "generic",

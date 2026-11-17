@@ -298,6 +298,73 @@ func TestE2E_SSE_Streaming(t *testing.T) {
 	assertRedactedUpstream(t, seen, []string{"<EMAIL_1>"}, []string{"alice@example.com"})
 }
 
+func TestE2E_Gemini_SSE_Streaming(t *testing.T) {
+	const requestBody = `{"contents":[{"parts":[{"text":"My email is alice@example.com"}]}]}`
+	const path = "/v1beta/models/gemini-1.5-pro:streamGenerateContent"
+
+	upstream, rec := newUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Error("upstream ResponseWriter is not a Flusher")
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "event: message\n"+
+			`data: {"candidates":[{"content":{"parts":[{"text":"Sure, email <EMAIL_1> now."}]}}]}`+"\n\n")
+		flusher.Flush()
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	})
+	proxySrv := newProxyServer(t, upstream.URL)
+
+	req, err := http.NewRequest(http.MethodPost, proxySrv.URL+path, strings.NewReader(requestBody))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Host = "generativelanguage.googleapis.com"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("proxy request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Fatalf("Content-Type = %q, want text/event-stream", ct)
+	}
+
+	var events []proxy.SSEEvent
+	if err := proxy.ParseEvents(resp.Body, func(ev proxy.SSEEvent) error {
+		events = append(events, ev)
+		return nil
+	}); err != nil {
+		t.Fatalf("parse SSE stream: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("got %d events, want 2: %+v", len(events), events)
+	}
+
+	joined := make([]string, len(events))
+	for i, ev := range events {
+		joined[i] = ev.Data
+	}
+	stream := strings.Join(joined, "\n")
+	if strings.Contains(stream, "<EMAIL_1>") {
+		t.Errorf("streamed data still contains placeholder: %s", stream)
+	}
+	if !strings.Contains(stream, "alice@example.com") {
+		t.Errorf("streamed data did not restore the original email: %s", stream)
+	}
+
+	seen, upstreamPath, _, _ := rec.received()
+	if upstreamPath != path {
+		t.Errorf("upstream path = %q, want %q", upstreamPath, path)
+	}
+	assertRedactedUpstream(t, seen, []string{"<EMAIL_1>"}, []string{"alice@example.com"})
+}
+
 func TestE2E_GenericFallback(t *testing.T) {
 	const requestBody = `{"prompt":"Email alice@example.com about the invoice"}`
 
