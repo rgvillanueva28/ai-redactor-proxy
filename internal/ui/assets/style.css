@@ -523,6 +523,7 @@ body {
 .entry__msg {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .entry__msg--empty {
@@ -563,6 +564,7 @@ body {
   min-width: 0;
   color: var(--text-muted);
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .empty {

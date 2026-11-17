@@ -9,7 +9,6 @@
   const DEFAULT_MAX_ENTRIES = 1000;
   const MIN_MAX_ENTRIES = 100;
   const MAX_MAX_ENTRIES = 10000;
-  const MAX_FIELD_LENGTH = 4000;
   const NEAR_BOTTOM_PX = 32;
   const SEARCH_DEBOUNCE_MS = 120;
 
@@ -105,11 +104,6 @@
     return String(value);
   }
 
-  function truncate(value) {
-    if (value.length <= MAX_FIELD_LENGTH) return value;
-    return value.slice(0, MAX_FIELD_LENGTH) + "…";
-  }
-
   // collectFields flattens nested slog groups into dotted key/value pairs.
   function collectFields(value, prefix, out) {
     for (const key of Object.keys(value)) {
@@ -169,8 +163,7 @@
     if (pairs.length > 0) {
       const fieldsEl = document.createElement("span");
       fieldsEl.className = "entry__fields";
-      for (const [name, fullValue] of pairs) {
-        const value = truncate(fullValue);
+      for (const [name, value] of pairs) {
         const field = document.createElement("span");
         field.className = "field";
 
@@ -181,7 +174,6 @@
         const valueEl = document.createElement("span");
         valueEl.className = "field__val";
         valueEl.textContent = value;
-        if (value !== fullValue) valueEl.title = fullValue.slice(0, 8192);
 
         field.append(keyEl, document.createTextNode("="), valueEl);
         fieldsEl.appendChild(field);
