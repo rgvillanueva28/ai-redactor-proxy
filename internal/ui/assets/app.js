@@ -12,6 +12,12 @@
   const NEAR_BOTTOM_PX = 32;
   const SEARCH_DEBOUNCE_MS = 120;
 
+  // List-view preview limits. Anything longer is cut and can be inspected in
+  // the modal, which always renders the full record.
+  const PREVIEW_MSG_LINES = 4;
+  const PREVIEW_FIELD_LENGTH = 120;
+  const MODAL_OPEN_CLASS = "modal--open";
+
   const LEVELS = ["debug", "info", "warn", "error"];
   const RESERVED_KEYS = new Set(["time", "level", "msg"]);
   const DEFAULT_EVENTS_URL = "/logs/events";
@@ -28,6 +34,10 @@
     search: document.getElementById("search"),
     autoscroll: document.getElementById("autoscroll"),
     clear: document.getElementById("clear"),
+    modal: document.getElementById("modal"),
+    modalBackdrop: document.getElementById("modal-backdrop"),
+    modalClose: document.getElementById("modal-close"),
+    modalContent: document.getElementById("modal-content"),
   };
 
   const maxEntries = resolveMaxEntries();
@@ -47,6 +57,7 @@
 
   let searchTimer = 0;
   let statsScheduled = false;
+  let modalReturnFocus = null;
 
   // ---------------------------------------------------------------- utilities
 
@@ -118,6 +129,23 @@
     return out;
   }
 
+  // recordFields returns the non-reserved fields of a record as flattened
+  // dotted key/value pairs, ready for both the row preview and the modal.
+  function recordFields(record) {
+    const attrs = {};
+    for (const key of Object.keys(record)) {
+      if (!RESERVED_KEYS.has(key)) attrs[key] = record[key];
+    }
+    return collectFields(attrs, "", []);
+  }
+
+  // truncatePreview keeps the leading maxLen characters and reports whether
+  // anything was dropped.
+  function truncatePreview(text, maxLen) {
+    const value = String(text == null ? "" : text);
+    return { preview: value.slice(0, maxLen), truncated: value.length > maxLen };
+  }
+
   // --------------------------------------------------------------- rendering
 
   function buildEntry(record) {
@@ -129,6 +157,10 @@
     const entry = document.createElement("div");
     entry.className = "entry";
     entry.dataset.level = level;
+    entry.record = record;
+
+    let hasLongContent = false;
+    let messageTruncated = false;
 
     const timeEl = document.createElement("time");
     timeEl.className = "entry__time";
@@ -149,17 +181,28 @@
       msgEl.classList.add("entry__msg--empty");
       msgEl.textContent = "(no message)";
     } else {
-      msgEl.textContent = message;
+      const lines = message.split("\n");
+      if (lines.length > PREVIEW_MSG_LINES) {
+        hasLongContent = true;
+        messageTruncated = true;
+        msgEl.classList.add("entry__msg--truncated");
+        msgEl.textContent = lines.slice(0, PREVIEW_MSG_LINES).join("\n");
+      } else {
+        msgEl.textContent = message;
+      }
     }
     body.appendChild(msgEl);
 
+    if (messageTruncated) {
+      const expandEl = document.createElement("span");
+      expandEl.className = "entry__expand";
+      expandEl.textContent = "Click to expand";
+      body.appendChild(expandEl);
+    }
+
     const haystack = [time.display, level, message];
 
-    const attrs = {};
-    for (const key of Object.keys(record)) {
-      if (!RESERVED_KEYS.has(key)) attrs[key] = record[key];
-    }
-    const pairs = collectFields(attrs, "", []);
+    const pairs = recordFields(record);
     if (pairs.length > 0) {
       const fieldsEl = document.createElement("span");
       fieldsEl.className = "entry__fields";
@@ -173,7 +216,14 @@
 
         const valueEl = document.createElement("span");
         valueEl.className = "field__val";
-        valueEl.textContent = value;
+        const valuePreview = truncatePreview(value, PREVIEW_FIELD_LENGTH);
+        if (valuePreview.truncated) {
+          hasLongContent = true;
+          valueEl.classList.add("field__val--truncated");
+          valueEl.textContent = valuePreview.preview + "…";
+        } else {
+          valueEl.textContent = value;
+        }
 
         field.append(keyEl, document.createTextNode("="), valueEl);
         fieldsEl.appendChild(field);
@@ -183,6 +233,20 @@
     }
 
     entry.append(timeEl, levelEl, body);
+
+    // Only rows with hidden content invite a click; the modal always shows the
+    // untruncated record.
+    if (hasLongContent) {
+      entry.dataset.hasLongContent = "true";
+      entry.tabIndex = 0;
+      entry.addEventListener("click", () => openModal(record));
+      entry.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        openModal(record);
+      });
+    }
+
     return {
       el: entry,
       level: level,
@@ -258,6 +322,108 @@
       els.stats.textContent = total.toLocaleString() + (total === 1 ? " entry" : " entries") + " · limit " + maxEntries.toLocaleString();
     } else {
       els.stats.textContent = "Showing " + state.visible.toLocaleString() + " of " + total.toLocaleString() + " entries";
+    }
+  }
+
+  // -------------------------------------------------------------------- modal
+
+  function isModalOpen() {
+    return Boolean(els.modal) && els.modal.classList.contains(MODAL_OPEN_CLASS);
+  }
+
+  function openModal(record) {
+    if (!els.modal || !els.modalContent) return;
+
+    const level = normalizeLevel(record.level);
+    const time = formatTime(record.time);
+    const rawMessage = record.msg == null ? "" : record.msg;
+    const message = typeof rawMessage === "string" ? rawMessage : formatValue(rawMessage);
+
+    els.modalContent.replaceChildren();
+    els.modalContent.dataset.level = level;
+
+    // Timestamp and level summary.
+    const meta = document.createElement("div");
+    meta.className = "modal__meta";
+
+    const timeEl = document.createElement("span");
+    timeEl.className = "modal__meta-time";
+    timeEl.textContent = time.title || time.display || "(no timestamp)";
+    if (time.iso) timeEl.title = time.iso;
+
+    const levelEl = document.createElement("span");
+    levelEl.className = "modal__level";
+    levelEl.textContent = level.toUpperCase();
+
+    meta.append(timeEl, levelEl);
+    els.modalContent.appendChild(meta);
+
+    // Full, untruncated message.
+    const messageSection = document.createElement("section");
+    messageSection.className = "modal__section";
+
+    const messageTitle = document.createElement("h3");
+    messageTitle.className = "modal__section-title";
+    messageTitle.textContent = "Message";
+
+    const messagePre = document.createElement("pre");
+    messagePre.className = "modal__pre";
+    messagePre.textContent = message === "" ? "(no message)" : message;
+
+    messageSection.append(messageTitle, messagePre);
+    els.modalContent.appendChild(messageSection);
+
+    // All fields with their complete values.
+    const pairs = recordFields(record);
+    if (pairs.length > 0) {
+      const fieldsSection = document.createElement("section");
+      fieldsSection.className = "modal__section";
+
+      const fieldsTitle = document.createElement("h3");
+      fieldsTitle.className = "modal__section-title";
+      fieldsTitle.textContent = "Fields";
+
+      const fieldsEl = document.createElement("div");
+      fieldsEl.className = "modal__fields";
+
+      for (const [name, value] of pairs) {
+        const row = document.createElement("div");
+        row.className = "modal__field";
+
+        const keyEl = document.createElement("span");
+        keyEl.className = "modal__field-key";
+        keyEl.textContent = name;
+
+        const valueEl = document.createElement("span");
+        valueEl.className = "modal__field-value";
+        valueEl.textContent = value;
+
+        row.append(keyEl, valueEl);
+        fieldsEl.appendChild(row);
+      }
+
+      fieldsSection.append(fieldsTitle, fieldsEl);
+      els.modalContent.appendChild(fieldsSection);
+    }
+
+    modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    els.modal.classList.add(MODAL_OPEN_CLASS);
+    document.body.style.overflow = "hidden";
+    els.modalContent.scrollTop = 0;
+    if (els.modalClose) els.modalClose.focus();
+  }
+
+  function closeModal() {
+    if (!isModalOpen()) return;
+
+    els.modal.classList.remove(MODAL_OPEN_CLASS);
+    document.body.style.overflow = "";
+    if (els.modalContent) els.modalContent.replaceChildren();
+
+    const previous = modalReturnFocus;
+    modalReturnFocus = null;
+    if (previous && previous.isConnected && typeof previous.focus === "function") {
+      previous.focus();
     }
   }
 
@@ -472,7 +638,15 @@
       }
     }, { passive: true });
 
+    if (els.modalClose) els.modalClose.addEventListener("click", closeModal);
+    if (els.modalBackdrop) els.modalBackdrop.addEventListener("click", closeModal);
+
     document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && isModalOpen()) {
+        event.preventDefault();
+        closeModal();
+        return;
+      }
       if (event.key !== "/" || event.ctrlKey || event.metaKey || event.altKey) return;
       const target = event.target;
       if (target instanceof HTMLElement && (target.isContentEditable || target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
