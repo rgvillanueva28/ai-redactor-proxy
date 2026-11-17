@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -112,6 +113,42 @@ func TestForwarder_BufferedRoundTrip(t *testing.T) {
 	}
 	if !strings.Contains(body, `"body":"{\"prompt\":\"hi\"}"`) {
 		t.Errorf("body missing request payload: %s", body)
+	}
+}
+
+func TestForwarder_AcceptEncodingStripped(t *testing.T) {
+	const payload = `{"id":"msg_1","text":"hello"}`
+
+	seen := make(chan string, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.Header.Get("Accept-Encoding")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, payload)
+	}))
+	defer upstream.Close()
+
+	_, proxySrv := newProxy(t, upstream.URL, nil, nil)
+
+	req := proxyRequest(t, http.MethodPost, proxySrv.URL, "/v1/chat/completions", testHost,
+		strings.NewReader(`{"prompt":"hi"}`))
+	req.Header.Set("Accept-Encoding", "gzip")
+	resp := mustDo(t, req)
+	body := readBody(t, resp)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %q)", resp.StatusCode, body)
+	}
+	if got := <-seen; got != "" {
+		t.Errorf("upstream saw Accept-Encoding = %q, want none", got)
+	}
+	if body != payload {
+		t.Errorf("body = %q, want %q", body, payload)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(body), &decoded); err != nil {
+		t.Errorf("response body is not valid JSON: %v (body %q)", err, body)
+	} else if got, _ := decoded["text"].(string); got != "hello" {
+		t.Errorf("decoded text = %q, want hello", got)
 	}
 }
 
