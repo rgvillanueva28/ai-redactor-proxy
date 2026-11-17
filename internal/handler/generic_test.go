@@ -33,7 +33,7 @@ func newGenericHandler(t *testing.T) *GenericHandler {
 	if err != nil {
 		t.Fatalf("pii.NewRegistry: %v", err)
 	}
-	return NewGenericHandler(reg.Redactor(), reg.Unredactor())
+	return NewGenericHandler(reg.Redactor(), reg.Unredactor(), false)
 }
 
 // mappingFor produces a mapping by redacting src, the same way the proxy does
@@ -157,7 +157,7 @@ func TestGeneric_MutateRequest_PassThrough(t *testing.T) {
 	})
 
 	t.Run("nil redactor", func(t *testing.T) {
-		g := NewGenericHandler(nil, nil)
+		g := NewGenericHandler(nil, nil, false)
 		src := []byte(`{"email":"a@b.com"}`)
 		got, err := g.MutateRequest(context.Background(), nil, src)
 		if err != nil {
@@ -258,7 +258,7 @@ func TestGeneric_MutateResponse_PassThrough(t *testing.T) {
 	})
 
 	t.Run("nil unredactor", func(t *testing.T) {
-		g := NewGenericHandler(nil, nil)
+		g := NewGenericHandler(nil, nil, false)
 		src := []byte(`{"email":"<EMAIL_1>"}`)
 		m := pii.GetMapping()
 		defer pii.PutMapping(m)
@@ -326,7 +326,7 @@ func TestGeneric_MutateStreamChunk_PassThrough(t *testing.T) {
 	})
 
 	t.Run("nil unredactor", func(t *testing.T) {
-		g := NewGenericHandler(nil, nil)
+		g := NewGenericHandler(nil, nil, false)
 		chunk := []byte("data: {}\n\n")
 		got, err := g.MutateStreamChunk(ctx, chunk, "text/event-stream")
 		if err != nil {

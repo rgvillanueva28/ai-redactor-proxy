@@ -23,8 +23,9 @@ import (
 //
 // A GenericHandler is stateless and safe for concurrent use.
 type GenericHandler struct {
-	redactor   *pii.Redactor
-	unredactor *pii.Unredactor
+	redactor    *pii.Redactor
+	unredactor  *pii.Unredactor
+	logRedacted bool
 }
 
 // Compile-time assertions that GenericHandler satisfies the proxy contracts.
@@ -35,9 +36,10 @@ var (
 
 // NewGenericHandler returns a handler that redacts with r and unredacts with u.
 // A nil redactor or unredactor disables that direction of the transformation,
-// which keeps the handler usable in pass-through tests.
-func NewGenericHandler(r *pii.Redactor, u *pii.Unredactor) *GenericHandler {
-	return &GenericHandler{redactor: r, unredactor: u}
+// which keeps the handler usable in pass-through tests. When logRedacted is
+// true every redacted item is logged at info level.
+func NewGenericHandler(r *pii.Redactor, u *pii.Unredactor, logRedacted bool) *GenericHandler {
+	return &GenericHandler{redactor: r, unredactor: u, logRedacted: logRedacted}
 }
 
 // MutateRequest walks the body, redacts every string leaf, and returns the
@@ -85,6 +87,9 @@ func (g *GenericHandler) MutateRequest(ctx context.Context, req *http.Request, b
 	// can then retrieve the mapping with mappingFromContext.
 	if req != nil {
 		*req = *req.WithContext(contextWithMapping(req.Context(), m))
+	}
+	if g.logRedacted {
+		logMapping(m)
 	}
 	return out, nil
 }

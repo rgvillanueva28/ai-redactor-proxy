@@ -58,7 +58,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	adapter := handler.NewAdapter(registry.Redactor(), registry.Unredactor())
+	adapter := handler.NewAdapter(registry.Redactor(), registry.Unredactor(), cfg.PII.LogRedacted)
 
 	router := proxy.NewRouter()
 	for name, upstream := range cfg.Upstream {

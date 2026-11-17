@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -23,7 +24,7 @@ const adapterDispatchBody = `{"messages":[{"role":"user","content":"alice.smith@
 func newAdapterForTest(t *testing.T) *Adapter {
 	t.Helper()
 	reg := newProviderRegistry(t)
-	return NewAdapter(reg.Redactor(), reg.Unredactor())
+	return NewAdapter(reg.Redactor(), reg.Unredactor(), false)
 }
 
 // adapterContext stores p under the context key the proxy uses for a resolved
@@ -283,5 +284,52 @@ func TestAdapter_MutateStreamChunk_Dispatch(t *testing.T) {
 				t.Fatalf("MutateStreamChunk:\n got %q\nwant %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestAdapter_LogRedacted verifies that when the log_redacted option is on,
+// every redacted item is logged at info level with its placeholder, category
+// and original value.
+func TestAdapter_LogRedacted(t *testing.T) {
+	prev := slog.Default()
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	defer slog.SetDefault(prev)
+
+	reg := newProviderRegistry(t)
+	adapter := NewAdapter(reg.Redactor(), reg.Unredactor(), true)
+
+	const body = `{"messages":[{"role":"user","content":"alice.smith@example.com"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+
+	if _, err := adapter.MutateRequest(adapterContext(req.Context(), proxy.ProviderOpenAI), req, []byte(body)); err != nil {
+		t.Fatalf("MutateRequest: %v", err)
+	}
+
+	logged := buf.String()
+	for _, want := range []string{
+		`"msg":"redacted"`,
+		`"placeholder":"<EMAIL_1>"`,
+		`"value":"alice.smith@example.com"`,
+	} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("log output is missing %s:\n%s", want, logged)
+		}
+	}
+	// Categories are logged in their canonical form (pii.CategoryEmail is
+	// "EMAIL"), so compare case-insensitively.
+	if !strings.Contains(strings.ToLower(logged), `"category":"email"`) {
+		t.Errorf("log output is missing the email category:\n%s", logged)
+	}
+
+	// With the option disabled the adapter must stay silent.
+	before := buf.Len()
+	quiet := NewAdapter(reg.Redactor(), reg.Unredactor(), false)
+	quietReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	if _, err := quiet.MutateRequest(adapterContext(quietReq.Context(), proxy.ProviderOpenAI), quietReq, []byte(body)); err != nil {
+		t.Fatalf("MutateRequest (disabled): %v", err)
+	}
+	if buf.Len() != before {
+		t.Errorf("disabled log_redacted still logged %q", buf.String()[before:])
 	}
 }

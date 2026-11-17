@@ -66,7 +66,7 @@ func jsonResponse() *http.Response {
 
 func TestOpenAI_MutateRequest(t *testing.T) {
 	reg := newProviderRegistry(t)
-	h := NewOpenAIHandler(reg.Redactor(), reg.Unredactor())
+	h := NewOpenAIHandler(reg.Redactor(), reg.Unredactor(), false)
 
 	src := fixture(t, "openai_request.json")
 	want := fixture(t, "openai_request_redacted.json")
@@ -110,7 +110,7 @@ func TestOpenAI_MutateRequest(t *testing.T) {
 
 func TestOpenAI_MutateRequest_UniquePlaceholdersAcrossMessages(t *testing.T) {
 	reg := newProviderRegistry(t)
-	h := NewOpenAIHandler(reg.Redactor(), reg.Unredactor())
+	h := NewOpenAIHandler(reg.Redactor(), reg.Unredactor(), false)
 
 	src := []byte(`{"messages":[{"role":"user","content":"first@example.com"},{"role":"user","content":[{"type":"text","text":"second@example.com"}]}]}`)
 	want := `{"messages":[{"role":"user","content":"<EMAIL_1>"},{"role":"user","content":[{"type":"text","text":"<EMAIL_2>"}]}]}`
@@ -122,7 +122,7 @@ func TestOpenAI_MutateRequest_UniquePlaceholdersAcrossMessages(t *testing.T) {
 }
 
 func TestOpenAI_MutateRequest_PassThrough(t *testing.T) {
-	h := NewOpenAIHandler(nil, nil)
+	h := NewOpenAIHandler(nil, nil, false)
 
 	t.Run("empty body", func(t *testing.T) {
 		got, err := h.MutateRequest(context.Background(), nil, nil)
@@ -156,7 +156,7 @@ func TestOpenAI_MutateRequest_PassThrough(t *testing.T) {
 
 func TestOpenAI_MutateResponse(t *testing.T) {
 	reg := newProviderRegistry(t)
-	h := NewOpenAIHandler(reg.Redactor(), reg.Unredactor())
+	h := NewOpenAIHandler(reg.Redactor(), reg.Unredactor(), false)
 
 	m, _ := mutateProviderRequest(t, h, fixture(t, "openai_request.json"))
 
@@ -183,7 +183,7 @@ func TestOpenAI_MutateResponse(t *testing.T) {
 
 func TestOpenAI_MutateResponse_FallsBackToRequestContext(t *testing.T) {
 	reg := newProviderRegistry(t)
-	h := NewOpenAIHandler(reg.Redactor(), reg.Unredactor())
+	h := NewOpenAIHandler(reg.Redactor(), reg.Unredactor(), false)
 
 	src := []byte(`{"messages":[{"role":"user","content":"Email a@b.com"}]}`)
 	m, _ := mutateProviderRequest(t, h, src)
@@ -202,7 +202,7 @@ func TestOpenAI_MutateResponse_FallsBackToRequestContext(t *testing.T) {
 }
 
 func TestOpenAI_MutateResponse_PassThrough(t *testing.T) {
-	h := NewOpenAIHandler(nil, nil)
+	h := NewOpenAIHandler(nil, nil, false)
 
 	t.Run("no mapping", func(t *testing.T) {
 		src := []byte(`{"choices":[{"message":{"content":"<EMAIL_1>"}}]}`)
@@ -244,7 +244,7 @@ func TestOpenAI_MutateResponse_PassThrough(t *testing.T) {
 
 func TestOpenAI_MutateStreamChunk(t *testing.T) {
 	reg := newProviderRegistry(t)
-	h := NewOpenAIHandler(reg.Redactor(), reg.Unredactor())
+	h := NewOpenAIHandler(reg.Redactor(), reg.Unredactor(), false)
 
 	m, _ := mutateProviderRequest(t, h, fixture(t, "openai_request.json"))
 	ctx := contextWithMapping(context.Background(), m)
@@ -299,7 +299,7 @@ func TestOpenAI_MutateStreamChunk(t *testing.T) {
 
 func TestAnthropic_MutateRequest(t *testing.T) {
 	reg := newProviderRegistry(t)
-	h := NewAnthropicHandler(reg.Redactor(), reg.Unredactor())
+	h := NewAnthropicHandler(reg.Redactor(), reg.Unredactor(), false)
 
 	src := fixture(t, "anthropic_request.json")
 	want := fixture(t, "anthropic_request_redacted.json")
@@ -330,7 +330,7 @@ func TestAnthropic_MutateRequest(t *testing.T) {
 
 func TestAnthropic_MutateRequest_SystemArray(t *testing.T) {
 	reg := newProviderRegistry(t)
-	h := NewAnthropicHandler(reg.Redactor(), reg.Unredactor())
+	h := NewAnthropicHandler(reg.Redactor(), reg.Unredactor(), false)
 
 	src := []byte(`{"system":[{"type":"text","text":"Escalate to alice.smith@example.com."},{"type":"text","text":"Be brief."}],"messages":[{"role":"user","content":"hi"}]}`)
 	want := `{"system":[{"type":"text","text":"Escalate to <EMAIL_1>."},{"type":"text","text":"Be brief."}],"messages":[{"role":"user","content":"hi"}]}`
@@ -342,7 +342,7 @@ func TestAnthropic_MutateRequest_SystemArray(t *testing.T) {
 }
 
 func TestAnthropic_MutateRequest_PassThrough(t *testing.T) {
-	h := NewAnthropicHandler(nil, nil)
+	h := NewAnthropicHandler(nil, nil, false)
 
 	src := []byte(`{"system":"x","messages":[{"content":"a@b.com"}]}`)
 	got, err := h.MutateRequest(context.Background(), nil, src)
@@ -365,7 +365,7 @@ func TestAnthropic_MutateRequest_PassThrough(t *testing.T) {
 
 func TestAnthropic_MutateResponse(t *testing.T) {
 	reg := newProviderRegistry(t)
-	h := NewAnthropicHandler(reg.Redactor(), reg.Unredactor())
+	h := NewAnthropicHandler(reg.Redactor(), reg.Unredactor(), false)
 
 	m, _ := mutateProviderRequest(t, h, fixture(t, "anthropic_request.json"))
 
@@ -391,7 +391,7 @@ func TestAnthropic_MutateResponse(t *testing.T) {
 }
 
 func TestAnthropic_MutateResponse_PassThrough(t *testing.T) {
-	h := NewAnthropicHandler(nil, nil)
+	h := NewAnthropicHandler(nil, nil, false)
 
 	t.Run("no mapping", func(t *testing.T) {
 		src := []byte(`{"content":[{"type":"text","text":"<EMAIL_1>"}]}`)
@@ -412,7 +412,7 @@ func TestAnthropic_MutateResponse_PassThrough(t *testing.T) {
 
 func TestAnthropic_MutateStreamChunk(t *testing.T) {
 	reg := newProviderRegistry(t)
-	h := NewAnthropicHandler(reg.Redactor(), reg.Unredactor())
+	h := NewAnthropicHandler(reg.Redactor(), reg.Unredactor(), false)
 
 	m, _ := mutateProviderRequest(t, h, fixture(t, "anthropic_request.json"))
 	ctx := contextWithMapping(context.Background(), m)
@@ -481,7 +481,7 @@ func TestAnthropic_MutateStreamChunk(t *testing.T) {
 
 func TestGemini_MutateRequest(t *testing.T) {
 	reg := newProviderRegistry(t)
-	h := NewGeminiHandler(reg.Redactor(), reg.Unredactor())
+	h := NewGeminiHandler(reg.Redactor(), reg.Unredactor(), false)
 
 	src := fixture(t, "gemini_request.json")
 	want := fixture(t, "gemini_request_redacted.json")
@@ -518,7 +518,7 @@ func TestGemini_MutateRequest(t *testing.T) {
 }
 
 func TestGemini_MutateRequest_PassThrough(t *testing.T) {
-	h := NewGeminiHandler(nil, nil)
+	h := NewGeminiHandler(nil, nil, false)
 
 	src := []byte(`{"contents":[{"parts":[{"text":"a@b.com"}]}]}`)
 	got, err := h.MutateRequest(context.Background(), nil, src)
@@ -541,7 +541,7 @@ func TestGemini_MutateRequest_PassThrough(t *testing.T) {
 
 func TestGemini_MutateResponse(t *testing.T) {
 	reg := newProviderRegistry(t)
-	h := NewGeminiHandler(reg.Redactor(), reg.Unredactor())
+	h := NewGeminiHandler(reg.Redactor(), reg.Unredactor(), false)
 
 	m, _ := mutateProviderRequest(t, h, fixture(t, "gemini_request.json"))
 
@@ -561,7 +561,7 @@ func TestGemini_MutateResponse(t *testing.T) {
 }
 
 func TestGemini_MutateResponse_PassThrough(t *testing.T) {
-	h := NewGeminiHandler(nil, nil)
+	h := NewGeminiHandler(nil, nil, false)
 
 	src := []byte(`{"candidates":[{"content":{"parts":[{"text":"<EMAIL_1>"}]}}]}`)
 	if got, err := h.MutateResponse(context.Background(), nil, src); err != nil || !bytes.Equal(got, src) {
@@ -571,7 +571,7 @@ func TestGemini_MutateResponse_PassThrough(t *testing.T) {
 
 func TestGemini_MutateStreamChunk(t *testing.T) {
 	reg := newProviderRegistry(t)
-	h := NewGeminiHandler(reg.Redactor(), reg.Unredactor())
+	h := NewGeminiHandler(reg.Redactor(), reg.Unredactor(), false)
 
 	m, _ := mutateProviderRequest(t, h, fixture(t, "gemini_request.json"))
 	ctx := contextWithMapping(context.Background(), m)
@@ -756,9 +756,9 @@ func TestWalkFields_Errors(t *testing.T) {
 func TestProviderHandlers_CompileTimeContracts(t *testing.T) {
 	reg := newProviderRegistry(t)
 	var mutators []proxy.ResponseMutator = []proxy.ResponseMutator{
-		NewOpenAIHandler(reg.Redactor(), reg.Unredactor()),
-		NewAnthropicHandler(reg.Redactor(), reg.Unredactor()),
-		NewGeminiHandler(reg.Redactor(), reg.Unredactor()),
+		NewOpenAIHandler(reg.Redactor(), reg.Unredactor(), false),
+		NewAnthropicHandler(reg.Redactor(), reg.Unredactor(), false),
+		NewGeminiHandler(reg.Redactor(), reg.Unredactor(), false),
 	}
 	for _, m := range mutators {
 		// A body with no placeholders must be returned unchanged.

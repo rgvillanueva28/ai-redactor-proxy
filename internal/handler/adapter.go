@@ -18,10 +18,11 @@ import (
 // owns carry only the immutable redactor/unredactor pair, and all per-request
 // state travels on the request context.
 type Adapter struct {
-	openai    *OpenAIHandler
-	anthropic *AnthropicHandler
-	gemini    *GeminiHandler
-	generic   *GenericHandler
+	openai      *OpenAIHandler
+	anthropic   *AnthropicHandler
+	gemini      *GeminiHandler
+	generic     *GenericHandler
+	logRedacted bool
 }
 
 // Compile-time assertions that Adapter satisfies the proxy contracts.
@@ -32,13 +33,15 @@ var (
 
 // NewAdapter returns an Adapter that dispatches to per-provider handlers built
 // from r and u. A nil redactor or unredactor disables that direction of the
-// transformation.
-func NewAdapter(r *pii.Redactor, u *pii.Unredactor) *Adapter {
+// transformation. When logRedacted is true, every redacted item is logged at
+// info level as it is produced.
+func NewAdapter(r *pii.Redactor, u *pii.Unredactor, logRedacted bool) *Adapter {
 	return &Adapter{
-		openai:    NewOpenAIHandler(r, u),
-		anthropic: NewAnthropicHandler(r, u),
-		gemini:    NewGeminiHandler(r, u),
-		generic:   NewGenericHandler(r, u),
+		openai:      NewOpenAIHandler(r, u, logRedacted),
+		anthropic:   NewAnthropicHandler(r, u, logRedacted),
+		gemini:      NewGeminiHandler(r, u, logRedacted),
+		generic:     NewGenericHandler(r, u, logRedacted),
+		logRedacted: logRedacted,
 	}
 }
 

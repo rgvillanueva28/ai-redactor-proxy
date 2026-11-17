@@ -44,8 +44,9 @@ var anthropicStreamFields = newFieldSet(
 //
 // An AnthropicHandler is stateless and safe for concurrent use.
 type AnthropicHandler struct {
-	redactor   *pii.Redactor
-	unredactor *pii.Unredactor
+	redactor    *pii.Redactor
+	unredactor  *pii.Unredactor
+	logRedacted bool
 }
 
 // Compile-time assertions that AnthropicHandler satisfies the proxy contracts.
@@ -56,8 +57,9 @@ var (
 
 // NewAnthropicHandler returns a handler that redacts with r and unredacts with u.
 // A nil redactor or unredactor disables that direction of the transformation.
-func NewAnthropicHandler(r *pii.Redactor, u *pii.Unredactor) *AnthropicHandler {
-	return &AnthropicHandler{redactor: r, unredactor: u}
+// When logRedacted is true every redacted item is logged at info level.
+func NewAnthropicHandler(r *pii.Redactor, u *pii.Unredactor, logRedacted bool) *AnthropicHandler {
+	return &AnthropicHandler{redactor: r, unredactor: u, logRedacted: logRedacted}
 }
 
 // MutateRequest redacts system (string or array of text blocks) and
@@ -67,7 +69,7 @@ func (h *AnthropicHandler) MutateRequest(ctx context.Context, req *http.Request,
 	if h == nil {
 		return body, nil
 	}
-	return redactBody(req, body, h.redactor, anthropicRequestFields)
+	return redactBody(req, body, h.redactor, anthropicRequestFields, h.logRedacted)
 }
 
 // MutateResponse restores placeholders in content[].text.

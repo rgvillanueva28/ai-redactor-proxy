@@ -41,8 +41,9 @@ var openAIStreamFields = newFieldSet(
 //
 // An OpenAIHandler is stateless and safe for concurrent use.
 type OpenAIHandler struct {
-	redactor   *pii.Redactor
-	unredactor *pii.Unredactor
+	redactor    *pii.Redactor
+	unredactor  *pii.Unredactor
+	logRedacted bool
 }
 
 // Compile-time assertions that OpenAIHandler satisfies the proxy contracts.
@@ -53,8 +54,9 @@ var (
 
 // NewOpenAIHandler returns a handler that redacts with r and unredacts with u.
 // A nil redactor or unredactor disables that direction of the transformation.
-func NewOpenAIHandler(r *pii.Redactor, u *pii.Unredactor) *OpenAIHandler {
-	return &OpenAIHandler{redactor: r, unredactor: u}
+// When logRedacted is true every redacted item is logged at info level.
+func NewOpenAIHandler(r *pii.Redactor, u *pii.Unredactor, logRedacted bool) *OpenAIHandler {
+	return &OpenAIHandler{redactor: r, unredactor: u, logRedacted: logRedacted}
 }
 
 // MutateRequest redacts messages[].content (string or array of parts) and
@@ -63,7 +65,7 @@ func (h *OpenAIHandler) MutateRequest(ctx context.Context, req *http.Request, bo
 	if h == nil {
 		return body, nil
 	}
-	return redactBody(req, body, h.redactor, openAIRequestFields)
+	return redactBody(req, body, h.redactor, openAIRequestFields, h.logRedacted)
 }
 
 // MutateResponse restores placeholders in choices[].message.content.

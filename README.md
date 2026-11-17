@@ -58,6 +58,7 @@ enable_apikey = true
 enable_domain = true
 enable_person_name = false  # High false-positive rate, opt-in only
 enable_client_name = true
+log_redacted = false  # Log each redacted item (placeholder, category, original value) at info level
 
 [pii.client_names]
 names = ["Acme Corp", "Project Phoenix", "Internal API"]

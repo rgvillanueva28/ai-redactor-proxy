@@ -37,8 +37,9 @@ var geminiResponseFields = newFieldSet(
 //
 // A GeminiHandler is stateless and safe for concurrent use.
 type GeminiHandler struct {
-	redactor   *pii.Redactor
-	unredactor *pii.Unredactor
+	redactor    *pii.Redactor
+	unredactor  *pii.Unredactor
+	logRedacted bool
 }
 
 // Compile-time assertions that GeminiHandler satisfies the proxy contracts.
@@ -49,8 +50,9 @@ var (
 
 // NewGeminiHandler returns a handler that redacts with r and unredacts with u.
 // A nil redactor or unredactor disables that direction of the transformation.
-func NewGeminiHandler(r *pii.Redactor, u *pii.Unredactor) *GeminiHandler {
-	return &GeminiHandler{redactor: r, unredactor: u}
+// When logRedacted is true every redacted item is logged at info level.
+func NewGeminiHandler(r *pii.Redactor, u *pii.Unredactor, logRedacted bool) *GeminiHandler {
+	return &GeminiHandler{redactor: r, unredactor: u, logRedacted: logRedacted}
 }
 
 // MutateRequest redacts contents[].parts[].text and
@@ -60,7 +62,7 @@ func (h *GeminiHandler) MutateRequest(ctx context.Context, req *http.Request, bo
 	if h == nil {
 		return body, nil
 	}
-	return redactBody(req, body, h.redactor, geminiRequestFields)
+	return redactBody(req, body, h.redactor, geminiRequestFields, h.logRedacted)
 }
 
 // MutateResponse restores placeholders in candidates[].content.parts[].text.

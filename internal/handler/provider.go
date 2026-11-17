@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -26,7 +27,7 @@ const sseDoneSentinel = "[DONE]"
 //
 // Bodies that are empty, not JSON, or have no selected leaves are returned
 // unchanged so non-JSON endpoints keep working.
-func redactBody(req *http.Request, body []byte, r *pii.Redactor, fields fieldSet) ([]byte, error) {
+func redactBody(req *http.Request, body []byte, r *pii.Redactor, fields fieldSet, logRedacted bool) ([]byte, error) {
 	if len(body) == 0 || r == nil || len(fields) == 0 {
 		return body, nil
 	}
@@ -58,12 +59,39 @@ func redactBody(req *http.Request, body []byte, r *pii.Redactor, fields fieldSet
 	if req != nil {
 		*req = *req.WithContext(contextWithMapping(req.Context(), m))
 	}
+	if logRedacted {
+		logMapping(m)
+	}
 	if !changed {
 		// Nothing was redacted: leave the body byte-for-byte intact rather than
 		// re-serializing it.
 		return body, nil
 	}
 	return out, nil
+}
+
+// logMapping emits one info-level structured log line per redacted item.
+//
+// Entries are sorted by placeholder first so the log order is deterministic
+// regardless of map iteration order. It is only called when the log_redacted
+// config option is enabled.
+func logMapping(m *pii.Mapping) {
+	entries := m.All()
+	if len(entries) == 0 {
+		return
+	}
+	placeholders := make([]string, 0, len(entries))
+	for ph := range entries {
+		placeholders = append(placeholders, ph)
+	}
+	sortPlaceholders(placeholders)
+
+	for _, ph := range placeholders {
+		slog.Info("redacted",
+			"placeholder", ph,
+			"category", string(categoryFromPlaceholder(ph)),
+			"value", entries[ph])
+	}
 }
 
 // unredactBody restores placeholders in the string leaves of body selected by
