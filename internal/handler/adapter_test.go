@@ -335,7 +335,7 @@ func TestAdapter_LogRedacted(t *testing.T) {
 }
 
 // TestAdapter_LogBodies verifies that when the log_bodies option is on, the
-// full request, response and stream chunk bodies are logged at debug level
+// full request, response and stream chunk bodies are logged at info level
 // before and after the transformation, and that the option being off keeps the
 // log silent.
 func TestAdapter_LogBodies(t *testing.T) {

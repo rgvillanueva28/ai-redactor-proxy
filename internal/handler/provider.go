@@ -94,16 +94,17 @@ func logMapping(m *pii.Mapping) {
 	}
 }
 
-// logBody emits one debug-level structured log line carrying body.
+// logBody emits one info-level structured log line carrying body.
 //
 // It is only called when the log_bodies config option is enabled, so a disabled
-// option costs nothing at all rather than a level check per body. Debug lines
-// are only rendered when the logger's level is LevelDebug (--log-level debug).
+// option costs nothing at all rather than a level check per body. Info lines are
+// rendered at the default log level, so enabling log_bodies is enough to see
+// them; no --log-level debug is required.
 func logBody(enabled bool, msg string, body []byte) {
 	if !enabled {
 		return
 	}
-	slog.Debug(msg, "body", string(body))
+	slog.Info(msg, "body", string(body))
 }
 
 // unredactBody restores placeholders in the string leaves of body selected by
