@@ -26,6 +26,43 @@ func TestMappingAddGeneratesPerCategoryPlaceholders(t *testing.T) {
 	}
 }
 
+func TestMappingDeduplicatesSameCategoryAndValue(t *testing.T) {
+	m := NewMapping()
+
+	first := m.Add(CategoryEmail, "alice@example.com")
+	if first != "<EMAIL_1>" {
+		t.Fatalf("first add = %q, want <EMAIL_1>", first)
+	}
+
+	// Same (category, original) pair returns the same placeholder.
+	for i := 0; i < 5; i++ {
+		if got := m.Add(CategoryEmail, "alice@example.com"); got != first {
+			t.Fatalf("dup add %d = %q, want %q", i, got, first)
+		}
+	}
+
+	// The duplicate adds must not have advanced the counter.
+	if got := m.Add(CategoryEmail, "bob@example.com"); got != "<EMAIL_2>" {
+		t.Fatalf("add after duplicates = %q, want <EMAIL_2>", got)
+	}
+
+	// The same value under a different category gets its own placeholder.
+	if got := m.Add(CategoryCreditCard, "alice@example.com"); got != "<CC_1>" {
+		t.Fatalf("same value, different category = %q, want <CC_1>", got)
+	}
+
+	// Only the two distinct emails plus the CC entry are registered.
+	if got := len(m.All()); got != 3 {
+		t.Fatalf("All() length = %d, want 3", got)
+	}
+
+	// Reset clears the reverse index so a subsequent add is fresh again.
+	m.Reset()
+	if got := m.Add(CategoryEmail, "alice@example.com"); got != "<EMAIL_1>" {
+		t.Fatalf("add after Reset = %q, want <EMAIL_1>", got)
+	}
+}
+
 func TestMappingLookupRoundTrip(t *testing.T) {
 	m := NewMapping()
 
@@ -99,9 +136,10 @@ func TestResetPreservesBackingMaps(t *testing.T) {
 
 	entriesBefore := fmt.Sprintf("%p", m.entries)
 	countersBefore := fmt.Sprintf("%p", m.counters)
+	assignedBefore := fmt.Sprintf("%p", m.assigned)
 
 	m.Reset()
-	if m.entries == nil || m.counters == nil {
+	if m.entries == nil || m.counters == nil || m.assigned == nil {
 		t.Fatal("Reset nilled a backing map; allocations were not preserved")
 	}
 
@@ -110,6 +148,9 @@ func TestResetPreservesBackingMaps(t *testing.T) {
 	}
 	if got := fmt.Sprintf("%p", m.counters); got != countersBefore {
 		t.Fatalf("counters map reallocated on Reset: %s -> %s", countersBefore, got)
+	}
+	if got := fmt.Sprintf("%p", m.assigned); got != assignedBefore {
+		t.Fatalf("assigned map reallocated on Reset: %s -> %s", assignedBefore, got)
 	}
 }
 

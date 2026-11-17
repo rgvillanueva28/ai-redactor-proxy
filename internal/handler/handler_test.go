@@ -473,7 +473,6 @@ func TestAnthropic_MutateRequest(t *testing.T) {
 	for ph, wantVal := range map[string]string{
 		"<EMAIL_1>": "alice.smith@example.com",
 		"<CC_1>":    "4111 1111 1111 1111",
-		"<CC_2>":    "4111 1111 1111 1111",
 	} {
 		if gotVal, ok := m.Lookup(ph); !ok || gotVal != wantVal {
 			t.Errorf("mapping[%s] = %q (present=%v), want %q", ph, gotVal, ok, wantVal)
@@ -656,7 +655,6 @@ func TestGemini_MutateRequest(t *testing.T) {
 		"<EMAIL_1>": "alice.smith@example.com",
 		"<PHONE_1>": "+1 415-555-2671",
 		"<SSN_1>":   "123-45-6789",
-		"<EMAIL_2>": "alice.smith@example.com",
 	} {
 		if gotVal, ok := m.Lookup(ph); !ok || gotVal != wantVal {
 			t.Errorf("mapping[%s] = %q (present=%v), want %q", ph, gotVal, ok, wantVal)

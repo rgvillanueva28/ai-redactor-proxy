@@ -63,7 +63,7 @@ func TestAdapter_MutateRequest_Dispatch(t *testing.T) {
 			},
 			wantPresent: []string{
 				`"content":"<EMAIL_1>"`,
-				`"system":"<EMAIL_2>"`,
+				`"system":"<EMAIL_1>"`,
 				`"text":"alice.smith@example.com"`,
 				`"user_email":"bob@example.org"`,
 			},
@@ -89,9 +89,9 @@ func TestAdapter_MutateRequest_Dispatch(t *testing.T) {
 			},
 			wantPresent: []string{
 				`"content":"<EMAIL_1>"`,
-				`"text":"<EMAIL_2>"`,
-				`"system":"<EMAIL_3>"`,
-				`"user_email":"<EMAIL_4>"`,
+				`"text":"<EMAIL_1>"`,
+				`"system":"<EMAIL_1>"`,
+				`"user_email":"<EMAIL_2>"`,
 			},
 			wantAbsent: []string{"alice.smith@example.com", "bob@example.org"},
 		},
@@ -102,7 +102,7 @@ func TestAdapter_MutateRequest_Dispatch(t *testing.T) {
 			},
 			wantPresent: []string{
 				`"content":"<EMAIL_1>"`,
-				`"user_email":"<EMAIL_4>"`,
+				`"user_email":"<EMAIL_2>"`,
 			},
 			wantAbsent: []string{"alice.smith@example.com", "bob@example.org"},
 		},
@@ -111,7 +111,7 @@ func TestAdapter_MutateRequest_Dispatch(t *testing.T) {
 			ctx:  func(ctx context.Context) context.Context { return ctx },
 			wantPresent: []string{
 				`"content":"<EMAIL_1>"`,
-				`"user_email":"<EMAIL_4>"`,
+				`"user_email":"<EMAIL_2>"`,
 			},
 			wantAbsent: []string{"alice.smith@example.com", "bob@example.org"},
 		},

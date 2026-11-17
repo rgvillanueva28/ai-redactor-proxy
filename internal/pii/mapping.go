@@ -14,6 +14,10 @@ type Mapping struct {
 	entries map[string]string // placeholder -> original
 	// per-category counters to generate <CATEGORY_N>
 	counters map[Category]int
+	// assigned maps a composite key of category + "\x00" + original to the
+	// placeholder already assigned to that (category, original) pair, so the
+	// same entity always resolves to the same placeholder within a request.
+	assigned map[string]string
 }
 
 // NewMapping returns an empty, ready-to-use Mapping.
@@ -21,7 +25,14 @@ func NewMapping() *Mapping {
 	return &Mapping{
 		entries:  make(map[string]string, 16),
 		counters: make(map[Category]int, 10),
+		assigned: make(map[string]string, 16),
 	}
+}
+
+// dedupKey builds the reverse-index key for a (category, original) pair. The
+// NUL separator cannot appear in a Category, so keys are unambiguous.
+func dedupKey(cat Category, original string) string {
+	return string(cat) + "\x00" + original
 }
 
 // Reset clears the mapping so it can be reused for another request. The
@@ -41,11 +52,17 @@ func (m *Mapping) Reset() {
 	} else {
 		clear(m.counters)
 	}
+	if m.assigned == nil {
+		m.assigned = make(map[string]string, 16)
+	} else {
+		clear(m.assigned)
+	}
 }
 
-// Add registers original under a fresh placeholder for cat and returns the
-// placeholder, e.g. "<EMAIL_1>". Counters are per-category and start at 1 for a
-// freshly reset Mapping.
+// Add registers original under a placeholder for cat and returns the
+// placeholder, e.g. "<EMAIL_1>". If the same (cat, original) pair was already
+// added, its existing placeholder is returned and no counter is incremented.
+// Counters are per-category and start at 1 for a freshly reset Mapping.
 func (m *Mapping) Add(cat Category, original string) string {
 	if m.entries == nil {
 		m.entries = make(map[string]string, 16)
@@ -53,9 +70,17 @@ func (m *Mapping) Add(cat Category, original string) string {
 	if m.counters == nil {
 		m.counters = make(map[Category]int, 10)
 	}
+	if m.assigned == nil {
+		m.assigned = make(map[string]string, 16)
+	}
+	key := dedupKey(cat, original)
+	if placeholder, ok := m.assigned[key]; ok {
+		return placeholder
+	}
 	m.counters[cat]++
 	placeholder := "<" + string(cat) + "_" + strconv.Itoa(m.counters[cat]) + ">"
 	m.entries[placeholder] = original
+	m.assigned[key] = placeholder
 	return placeholder
 }
 

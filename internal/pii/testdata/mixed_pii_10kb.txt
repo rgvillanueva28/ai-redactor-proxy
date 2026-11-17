@@ -52,7 +52,7 @@ Reach the account manager on 617.555.0199 during business hours; voicemail is mo
 Please do not forward the card details 371449635398431 in plain text over email again.
 The log shipper has been sending traffic from 8.8.8.8 since the maintenance window.
 The credentials were accidentally committed from /var/log/redactor/access.log and need rotating today.
-Their primary site is internal.acme.com, though the marketing team also runs a few microsites.
+Their primary site is internal.vertexlabs.io, though the marketing team also runs a few microsites.
 Quick follow-up: please loop in gilles.moreau@fabrikam.net so the renewal paperwork is signed before the quarter closes.
 If the courier runs late, call +1-650-555-0177 and ask for the loading bay supervisor.
 The corporate card ending 6011111111111117 was used for the annual licence renewal last week.
