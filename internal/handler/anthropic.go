@@ -101,9 +101,17 @@ func (h *AnthropicHandler) MutateResponse(ctx context.Context, resp *http.Respon
 // Every other event type — message_start, content_block_start, ping,
 // message_delta, message_stop — is returned byte-for-byte unchanged, including
 // its "event:" line, because Anthropic clients dispatch on the event name.
+// When logBodies is enabled the chunk is logged before and after unredaction,
+// matching the OpenAI and Gemini handlers.
 func (h *AnthropicHandler) MutateStreamChunk(ctx context.Context, chunk []byte, contentType string) ([]byte, error) {
 	if h == nil {
 		return chunk, nil
 	}
-	return unredactSSEEvent(ctx, chunk, h.unredactor, anthropicStreamFields)
+	out, err := unredactSSEEvent(ctx, chunk, h.unredactor, anthropicStreamFields)
+	if err != nil {
+		return nil, err
+	}
+	logBody(h.logBodies, "stream chunk (redacted)", chunk)
+	logBody(h.logBodies, "stream chunk (unredacted)", out)
+	return out, nil
 }

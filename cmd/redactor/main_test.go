@@ -298,6 +298,71 @@ func TestE2E_SSE_Streaming(t *testing.T) {
 	assertRedactedUpstream(t, seen, []string{"<EMAIL_1>"}, []string{"alice@example.com"})
 }
 
+// TestE2E_SSE_Streaming_SplitPlaceholder streams the echoed placeholder one
+// token at a time, the way a real model does, and verifies the proxy stitches it
+// back together instead of forwarding the partial tokens.
+func TestE2E_SSE_Streaming_SplitPlaceholder(t *testing.T) {
+	const requestBody = `{"model":"gpt-4o","stream":true,"messages":[{"role":"user","content":"My email is alice@example.com"}]}`
+
+	upstream, rec := newUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Error("upstream ResponseWriter is not a Flusher")
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		for _, part := range []string{"<", "EMAIL", "_1>", " now."} {
+			fmt.Fprintf(w, `data: {"choices":[{"index":0,"delta":{"content":%q}}]}`+"\n\n", part)
+			flusher.Flush()
+		}
+		fmt.Fprint(w, `data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`+"\n\n")
+		flusher.Flush()
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	})
+	proxySrv := newProxyServer(t, upstream.URL)
+
+	req, err := http.NewRequest(http.MethodPost, proxySrv.URL+"/v1/chat/completions", strings.NewReader(requestBody))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Host = "api.openai.com"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("proxy request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var events []proxy.SSEEvent
+	if err := proxy.ParseEvents(resp.Body, func(ev proxy.SSEEvent) error {
+		events = append(events, ev)
+		return nil
+	}); err != nil {
+		t.Fatalf("parse SSE stream: %v", err)
+	}
+
+	joined := make([]string, len(events))
+	for i, ev := range events {
+		joined[i] = ev.Data
+	}
+	stream := strings.Join(joined, "\n")
+	if strings.Contains(stream, "<EMAIL") {
+		t.Errorf("streamed data leaked a partial placeholder: %s", stream)
+	}
+	if !strings.Contains(stream, "alice@example.com") {
+		t.Errorf("streamed data did not restore the original email: %s", stream)
+	}
+	if !strings.Contains(stream, "[DONE]") {
+		t.Errorf("stream is missing the [DONE] sentinel: %s", stream)
+	}
+
+	seen, _, _, _ := rec.received()
+	assertRedactedUpstream(t, seen, []string{"<EMAIL_1>"}, []string{"alice@example.com"})
+}
+
 func TestE2E_Gemini_SSE_Streaming(t *testing.T) {
 	const requestBody = `{"contents":[{"parts":[{"text":"My email is alice@example.com"}]}]}`
 	const path = "/v1beta/models/gemini-1.5-pro:streamGenerateContent"

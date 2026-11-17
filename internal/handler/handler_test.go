@@ -297,6 +297,164 @@ func TestOpenAI_MutateStreamChunk(t *testing.T) {
 	})
 }
 
+// sseOpenAIContent builds one OpenAI stream event whose delta.content is text.
+func sseOpenAIContent(t *testing.T, text string) []byte {
+	t.Helper()
+	payload, err := json.Marshal(map[string]any{
+		"choices": []any{
+			map[string]any{"index": 0, "delta": map[string]string{"content": text}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal chunk: %v", err)
+	}
+	return []byte("data: " + string(payload) + "\n\n")
+}
+
+// sseOpenAIDelta returns the delta.content of one OpenAI stream event.
+func sseOpenAIDelta(t *testing.T, chunk []byte) string {
+	t.Helper()
+	data, ok := ParseSSEData(chunk)
+	if !ok {
+		t.Fatalf("chunk carries no data: %q", chunk)
+	}
+	var v struct {
+		Choices []struct {
+			Delta struct {
+				Content string `json:"content"`
+			} `json:"delta"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal([]byte(data), &v); err != nil {
+		t.Fatalf("unmarshal chunk %q: %v", chunk, err)
+	}
+	if len(v.Choices) == 0 {
+		return ""
+	}
+	return v.Choices[0].Delta.Content
+}
+
+// TestOpenAI_MutateStreamChunk_SplitPlaceholder feeds a placeholder token by
+// token, as a real model streams it, and verifies the handler stitches the
+// pieces back together instead of leaking the partial placeholder.
+func TestOpenAI_MutateStreamChunk_SplitPlaceholder(t *testing.T) {
+	reg := newProviderRegistry(t)
+	h := NewOpenAIHandler(reg.Redactor(), reg.Unredactor(), false, false)
+
+	src := []byte(`{"messages":[{"role":"user","content":"Email alice.smith@example.com"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(src))
+	if _, err := h.MutateRequest(req.Context(), req, src); err != nil {
+		t.Fatalf("MutateRequest: %v", err)
+	}
+	ctx := req.Context()
+	if mappingFromContext(ctx) == nil {
+		t.Fatal("MutateRequest did not publish a mapping")
+	}
+	if streamStateFromContext(ctx) == nil {
+		t.Fatal("MutateRequest did not publish a stream state")
+	}
+
+	parts := []string{"<", "EMAIL", "_1>", " for the receipt."}
+	var got strings.Builder
+	for _, part := range parts {
+		out, err := h.MutateStreamChunk(ctx, sseOpenAIContent(t, part), "text/event-stream")
+		if err != nil {
+			t.Fatalf("MutateStreamChunk(%q): %v", part, err)
+		}
+		got.WriteString(sseOpenAIDelta(t, out))
+	}
+
+	if want := "alice.smith@example.com for the receipt."; got.String() != want {
+		t.Fatalf("streamed text = %q, want %q", got.String(), want)
+	}
+}
+
+// TestOpenAI_MutateStreamChunk_CompletePlaceholderFlushesImmediately guards the
+// no-regression case: a complete placeholder is restored in the same event and
+// the surrounding text is not delayed.
+func TestOpenAI_MutateStreamChunk_CompletePlaceholderFlushesImmediately(t *testing.T) {
+	reg := newProviderRegistry(t)
+	h := NewOpenAIHandler(reg.Redactor(), reg.Unredactor(), false, false)
+
+	src := []byte(`{"messages":[{"role":"user","content":"Email alice.smith@example.com"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(src))
+	if _, err := h.MutateRequest(req.Context(), req, src); err != nil {
+		t.Fatalf("MutateRequest: %v", err)
+	}
+
+	out, err := h.MutateStreamChunk(req.Context(), sseOpenAIContent(t, "Email <EMAIL_1> now."), "text/event-stream")
+	if err != nil {
+		t.Fatalf("MutateStreamChunk: %v", err)
+	}
+	if got, want := sseOpenAIDelta(t, out), "Email alice.smith@example.com now."; got != want {
+		t.Fatalf("delta.content = %q, want %q", got, want)
+	}
+}
+
+func TestSplitIncompletePlaceholder(t *testing.T) {
+	cases := []struct {
+		in       string
+		complete string
+		partial  string
+	}{
+		{"plain text", "plain text", ""},
+		{"<", "", "<"},
+		{"<EMAIL", "", "<EMAIL"},
+		{"<EMAIL_", "", "<EMAIL_"},
+		{"<EMAIL_1", "", "<EMAIL_1"},
+		{"hello <EMAIL_1", "hello ", "<EMAIL_1"},
+		{"<EMAIL_1>", "<EMAIL_1>", ""},
+		{"done <EMAIL_1> and", "done <EMAIL_1> and", ""},
+		// A trailing lowercase run is prose, not a placeholder prefix.
+		{"a <b", "a <b", ""},
+	}
+	for _, tc := range cases {
+		complete, partial := splitIncompletePlaceholder(tc.in)
+		if complete != tc.complete || partial != tc.partial {
+			t.Errorf("splitIncompletePlaceholder(%q) = (%q, %q), want (%q, %q)",
+				tc.in, complete, partial, tc.complete, tc.partial)
+		}
+	}
+}
+
+// TestUnredactFieldsWithState_MultiLeaf verifies that buffering only ever holds
+// back the final selected leaf, so a partial placeholder in an earlier leaf is
+// never spliced into a later field.
+func TestUnredactFieldsWithState_MultiLeaf(t *testing.T) {
+	m := pii.NewMapping()
+	m.Add(pii.CategoryEmail, "alice@example.com")
+	u := pii.NewUnredactor()
+	fields := newFieldSet([]string{"a"}, []string{"b"})
+	state := newStreamState()
+
+	// The split placeholder lives in "a", which is not the last leaf, so it is
+	// passed through untouched rather than buffered and spliced into "b".
+	got, err := unredactFieldsWithState([]byte(`{"a":"<EMAIL","b":"next"}`), m, u, fields, state)
+	if err != nil {
+		t.Fatalf("unredactFieldsWithState: %v", err)
+	}
+	if want := `{"a":"<EMAIL","b":"next"}`; string(got) != want {
+		t.Fatalf("multi-leaf walk = %s, want %s", got, want)
+	}
+
+	// A split placeholder in the last leaf is buffered and completed by the
+	// following chunk.
+	got, err = unredactFieldsWithState([]byte(`{"a":"x","b":"<EMAIL"}`), m, u, fields, state)
+	if err != nil {
+		t.Fatalf("unredactFieldsWithState: %v", err)
+	}
+	if want := `{"a":"x","b":""}`; string(got) != want {
+		t.Fatalf("buffered first half = %s, want %s", got, want)
+	}
+	got, err = unredactFieldsWithState([]byte(`{"a":"y","b":"_1>"}`), m, u, fields, state)
+	if err != nil {
+		t.Fatalf("unredactFieldsWithState: %v", err)
+	}
+	if want := `{"a":"y","b":"alice@example.com"}`; string(got) != want {
+		t.Fatalf("buffered second half = %s, want %s", got, want)
+	}
+}
+
 func TestAnthropic_MutateRequest(t *testing.T) {
 	reg := newProviderRegistry(t)
 	h := NewAnthropicHandler(reg.Redactor(), reg.Unredactor(), false, false)

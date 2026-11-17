@@ -132,10 +132,12 @@ func (h *GeminiHandler) unredactStreamChunk(ctx context.Context, chunk []byte, c
 		return unredactSSEEvent(ctx, chunk, h.unredactor, geminiResponseFields)
 	}
 
+	state := streamStateFromContext(ctx)
+
 	// Whole-chunk JSON is the common case for a single streamed line (and for
 	// callers that hand us the entire body at once).
 	if json.Valid(bytes.TrimSpace(chunk)) {
-		return unredactFields(chunk, m, h.unredactor, geminiResponseFields)
+		return unredactFieldsWithState(chunk, m, h.unredactor, geminiResponseFields, state)
 	}
 
 	var out bytes.Buffer
@@ -163,7 +165,7 @@ func (h *GeminiHandler) unredactStreamChunk(ctx context.Context, chunk []byte, c
 			continue
 		}
 
-		walked, err := unredactFields(trimmed, m, h.unredactor, geminiResponseFields)
+		walked, err := unredactFieldsWithState(trimmed, m, h.unredactor, geminiResponseFields, state)
 		if err != nil {
 			return nil, err
 		}

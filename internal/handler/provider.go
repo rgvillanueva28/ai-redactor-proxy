@@ -57,7 +57,13 @@ func redactBody(req *http.Request, body []byte, r *pii.Redactor, fields fieldSet
 	}
 
 	if req != nil {
-		*req = *req.WithContext(contextWithMapping(req.Context(), m))
+		// Publishing the mapping and the stream state together keeps the
+		// response half stateful even when the response is streamed: the
+		// proxy carries this same context through to MutateStreamChunk, so
+		// a placeholder split across SSE events can be stitched back together.
+		ctx := contextWithMapping(req.Context(), m)
+		ctx = contextWithStreamState(ctx, newStreamState())
+		*req = *req.WithContext(ctx)
 	}
 	if logRedacted {
 		logMapping(m)
@@ -134,10 +140,45 @@ func unredactBody(ctx context.Context, resp *http.Response, body []byte, u *pii.
 // unredactFields walks the selected leaves of one JSON document, returning body
 // unchanged when no placeholder was found.
 func unredactFields(body []byte, m *pii.Mapping, u *pii.Unredactor, fields fieldSet) ([]byte, error) {
-	changed := false
+	return unredactFieldsWithState(body, m, u, fields, nil)
+}
 
+// unredactFieldsWithState is unredactFields with optional cross-chunk
+// placeholder buffering. When state is non-nil only the *final* selected leaf is
+// stitched onto the previous chunk's incomplete tail.
+//
+// Restricting buffering to the last leaf matters: holding back an earlier leaf's
+// trailing text would splice it into the next selected leaf, corrupting an
+// unrelated field. Provider streams put the model's text in the final text leaf
+// of each event (choices[].delta.content, delta.text, parts[].text), so the
+// token-split case is still covered. A nil state reproduces the stateless
+// behaviour used for buffered (non-streamed) responses.
+func unredactFieldsWithState(body []byte, m *pii.Mapping, u *pii.Unredactor, fields fieldSet, state *streamState) ([]byte, error) {
+	// Count the selected leaves first so the walk below knows which one is last.
+	last := -1
+	if state != nil {
+		n := 0
+		if _, err := walkFields(body, fields, func(string) (string, error) {
+			n++
+			return "", nil
+		}); err != nil {
+			return nil, err
+		}
+		last = n - 1
+	}
+
+	changed := false
+	i := 0
 	out, err := walkFields(body, fields, func(s string) (string, error) {
-		restored := u.Unredact(s, m)
+		idx := i
+		i++
+
+		restored := s
+		if state != nil && idx == last {
+			restored = state.unredactLeaf(s, u, m)
+		} else {
+			restored = u.Unredact(s, m)
+		}
 		if restored != s {
 			changed = true
 		}
@@ -159,6 +200,10 @@ func unredactFields(body []byte, m *pii.Mapping, u *pii.Unredactor, fields field
 // already in flight. Because rewriteSSEData only rebuilds an event whose data
 // actually changed, payload-free events (Anthropic's message_start and
 // message_delta, for instance) keep their exact framing.
+//
+// When the request carried a stream state, an incomplete placeholder at the end
+// of a chunk (for example "<EMAIL" or "<EMAIL_1") is held back and prepended to
+// the next chunk's text, so a placeholder split across tokens is still restored.
 func unredactSSEEvent(ctx context.Context, chunk []byte, u *pii.Unredactor, fields fieldSet) ([]byte, error) {
 	if len(chunk) == 0 || u == nil || len(fields) == 0 {
 		return chunk, nil
@@ -167,6 +212,7 @@ func unredactSSEEvent(ctx context.Context, chunk []byte, u *pii.Unredactor, fiel
 	if m == nil {
 		return chunk, nil
 	}
+	state := streamStateFromContext(ctx)
 
 	return rewriteSSEData(chunk, func(data string) (string, error) {
 		trimmed := strings.TrimSpace(data)
@@ -174,18 +220,11 @@ func unredactSSEEvent(ctx context.Context, chunk []byte, u *pii.Unredactor, fiel
 			return data, nil
 		}
 
-		changed := false
-		out, err := walkFields([]byte(data), fields, func(s string) (string, error) {
-			restored := u.Unredact(s, m)
-			if restored != s {
-				changed = true
-			}
-			return restored, nil
-		})
+		out, err := unredactFieldsWithState([]byte(data), m, u, fields, state)
 		if err != nil {
 			return "", err
 		}
-		if !changed {
+		if bytes.Equal(out, []byte(data)) {
 			return data, nil
 		}
 		return string(out), nil
