@@ -474,7 +474,7 @@ func TestE2E_HealthEndpoint(t *testing.T) {
 		[]proxy.ResponseMutator{adapter},
 	)
 
-	srv := proxy.NewServer(addr, newMux(proxyHandler))
+	srv := proxy.NewServer(addr, newMux(proxyHandler, config.DefaultConfig()))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -502,6 +502,102 @@ func TestE2E_HealthEndpoint(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("server did not shut down after cancellation")
+	}
+}
+
+// markerProxy stands in for the proxy handler in routing tests. It flags every
+// request that reaches the catch-all route so tests can prove a path was not
+// captured by a more specific pattern.
+func markerProxy() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Handled-By", "proxy")
+		http.NotFound(w, r)
+	})
+}
+
+func TestNewMuxServesUIWhenEnabled(t *testing.T) {
+	mux := newMux(markerProxy(), config.DefaultConfig())
+
+	for _, path := range []string{"/logs", "/logs/"} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s status = %d, want 200", path, rec.Code)
+		}
+		if ct := rec.Header().Get("Content-Type"); ct != "text/html; charset=utf-8" {
+			t.Errorf("GET %s Content-Type = %q, want text/html; charset=utf-8", path, ct)
+		}
+		if !strings.Contains(rec.Body.String(), "<title>Redactor") {
+			t.Errorf("GET %s did not serve the viewer page", path)
+		}
+		if got := rec.Header().Get("X-Handled-By"); got != "" {
+			t.Errorf("GET %s reached the proxy handler (%s), want the UI handler", path, got)
+		}
+	}
+
+	assets := map[string]string{
+		"/logs/app.js":    "text/javascript; charset=utf-8",
+		"/logs/style.css": "text/css; charset=utf-8",
+	}
+	for path, wantCT := range assets {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s status = %d, want 200", path, rec.Code)
+		}
+		if ct := rec.Header().Get("Content-Type"); ct != wantCT {
+			t.Errorf("GET %s Content-Type = %q, want %q", path, ct, wantCT)
+		}
+		if rec.Body.Len() == 0 {
+			t.Errorf("GET %s served an empty body", path)
+		}
+		if got := rec.Header().Get("X-Handled-By"); got != "" {
+			t.Errorf("GET %s reached the proxy handler (%s), want the UI handler", path, got)
+		}
+	}
+}
+
+// TestNewMuxServesSSEWhenEnabled proves /logs/events resolves to the SSE
+// handler rather than the UI subtree. The request context is cancelled up front
+// so the streaming handler returns immediately after writing its headers.
+func TestNewMuxServesSSEWhenEnabled(t *testing.T) {
+	mux := newMux(markerProxy(), config.DefaultConfig())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodGet, "/logs/events", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("GET /logs/events status = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/event-stream" {
+		t.Errorf("GET /logs/events Content-Type = %q, want text/event-stream", ct)
+	}
+	if got := rec.Header().Get("X-Handled-By"); got != "" {
+		t.Errorf("GET /logs/events reached the proxy handler (%s), want the SSE handler", got)
+	}
+}
+
+func TestNewMuxLogsHiddenWhenUIDisabled(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.UI.Enable = false
+	mux := newMux(markerProxy(), cfg)
+
+	paths := []string{"/logs", "/logs/", "/logs/events", "/logs/app.js", "/logs/style.css"}
+	for _, path := range paths {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s status = %d, want 404 from the proxy catch-all", path, rec.Code)
+		}
+		if got := rec.Header().Get("X-Handled-By"); got != "proxy" {
+			t.Errorf("GET %s X-Handled-By = %q, want the proxy handler", path, got)
+		}
 	}
 }
 

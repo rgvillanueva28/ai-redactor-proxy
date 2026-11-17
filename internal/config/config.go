@@ -13,6 +13,7 @@ type Config struct {
 	Listen   ListenConfig              `toml:"listen"`
 	PII      PIIConfig                 `toml:"pii"`
 	Upstream map[string]UpstreamConfig `toml:"upstream"`
+	UI       UIConfig                  `toml:"ui"`
 }
 
 // ListenConfig configures the local listener.
@@ -49,6 +50,14 @@ type UpstreamConfig struct {
 	BaseURL   string `toml:"base_url"`
 }
 
+// UIConfig controls the embedded log viewer served by the proxy.
+type UIConfig struct {
+	// Enable controls whether the log viewer and its event stream are served
+	// at /logs. Disabling it leaves every /logs path unregistered so the
+	// catch-all proxy handler treats them as ordinary upstream requests.
+	Enable bool `toml:"enable"`
+}
+
 // DefaultConfig returns the default configuration. Values match the documented
 // sample TOML.
 func DefaultConfig() *Config {
@@ -83,6 +92,7 @@ func DefaultConfig() *Config {
 				BaseURL:   "https://generativelanguage.googleapis.com",
 			},
 		},
+		UI: UIConfig{Enable: true},
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"github.com/local/redactor/internal/logging"
 	"github.com/local/redactor/internal/pii"
 	"github.com/local/redactor/internal/proxy"
+	"github.com/local/redactor/internal/ui"
 )
 
 func main() {
@@ -71,7 +72,7 @@ func main() {
 	forwarder := proxy.NewForwarder()
 	proxyHandler := proxy.NewHandler(router, forwarder, []proxy.RequestMutator{adapter}, []proxy.ResponseMutator{adapter})
 
-	server := proxy.NewServer(cfg.Listen.Address, newMux(proxyHandler))
+	server := proxy.NewServer(cfg.Listen.Address, newMux(proxyHandler, cfg))
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -93,12 +94,22 @@ func findLocalConfig() string {
 	return ""
 }
 
-// newMux builds the proxy's HTTP mux: /healthz answers liveness checks and
-// every other path is handled by proxyHandler. It is factored out so tests can
-// exercise the exact routing the binary installs.
-func newMux(proxyHandler http.Handler) *http.ServeMux {
+// newMux builds the proxy's HTTP mux: /healthz answers liveness checks, the log
+// viewer and its event stream are mounted under /logs when cfg.UI.Enable is set,
+// and every other path is handled by proxyHandler. It is factored out so tests
+// can exercise the exact routing the binary installs.
+//
+// The /logs endpoints are registered before the "/" catch-all because the mux
+// resolves the most specific pattern first; within /logs, the exact
+// "/logs/events" pattern wins over the "/logs/" subtree.
+func newMux(proxyHandler http.Handler, cfg *config.Config) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", health.Handler())
+	if cfg != nil && cfg.UI.Enable {
+		mux.Handle("/logs/events", logging.SSEHandler())
+		mux.Handle("/logs/", ui.Handler())
+		mux.Handle("/logs", ui.Handler())
+	}
 	mux.Handle("/", proxyHandler)
 	return mux
 }

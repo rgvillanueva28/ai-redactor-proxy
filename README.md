@@ -69,6 +69,9 @@ names = ["Acme Corp", "Project Phoenix", "Internal API"]
 [upstream.openai]
 host_match = "api.openai.com"
 base_url = "https://api.openai.com"
+
+[ui]
+enable = true  # Serve the real-time log viewer at /logs (default: true)
 ```
 
 ## Usage with AI CLIs
@@ -95,6 +98,31 @@ gemini-cli --base-url=http://127.0.0.1:8443
 ```bash
 curl http://127.0.0.1:8443/healthz
 ```
+
+## Live Log Viewer
+
+The proxy serves a real-time log viewer on the same port as the proxy itself.
+Open `http://127.0.0.1:8443/logs` in a browser to watch the proxy's structured
+JSON logs as they are emitted.
+
+- Log records are streamed over Server-Sent Events from `/logs/events`.
+- The viewer filters entries client-side by level (debug, info, warn, error) and
+  by free-text search.
+- Assets are embedded in the binary, so the UI adds no runtime files.
+- The stream is read-only and shows the same records the proxy writes to stderr.
+
+The viewer is enabled by default. To turn it off, add the following to your
+config file:
+
+```toml
+[ui]
+enable = false
+```
+
+When disabled, the `/logs` paths are not registered at all, so requests to them
+are handled by the proxy's normal routing exactly like any other path. The
+proxy's `--log-level` flag still controls which records are emitted, so use
+`--log-level debug` for the most detail.
 
 ## Systemd Service (Linux)
 

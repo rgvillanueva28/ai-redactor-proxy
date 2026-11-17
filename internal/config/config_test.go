@@ -40,6 +40,9 @@ base_url = "https://api.anthropic.com"
 [upstream.gemini]
 host_match = "generativelanguage.googleapis.com"
 base_url = "https://generativelanguage.googleapis.com"
+
+[ui]
+enable = false
 `
 
 func TestParseValidTOML(t *testing.T) {
@@ -109,6 +112,10 @@ func TestParseValidTOML(t *testing.T) {
 	if !reflect.DeepEqual(cfg.Upstream, wantUpstreams) {
 		t.Errorf("upstream = %#v, want %#v", cfg.Upstream, wantUpstreams)
 	}
+
+	if cfg.UI.Enable {
+		t.Error("ui.enable = true, want false")
+	}
 }
 
 func TestParseEmptyTOMLUsesDefaults(t *testing.T) {
@@ -158,6 +165,34 @@ enable_email = false
 	}
 	if cfg.Upstream["gemini"].HostMatch != "generativelanguage.googleapis.com" {
 		t.Errorf("gemini host_match = %q, want default", cfg.Upstream["gemini"].HostMatch)
+	}
+	// An omitted [ui] section leaves the viewer enabled.
+	if !cfg.UI.Enable {
+		t.Error("ui.enable = false, want default true")
+	}
+}
+
+func TestParseUIToggle(t *testing.T) {
+	cfg, err := parse([]byte(`
+[ui]
+enable = false
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.UI.Enable {
+		t.Error("ui.enable = true, want false (explicitly set)")
+	}
+
+	cfg, err = parse([]byte(`
+[ui]
+enable = true
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !cfg.UI.Enable {
+		t.Error("ui.enable = false, want true (explicitly set)")
 	}
 }
 
@@ -287,5 +322,9 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if !reflect.DeepEqual(cfg.Upstream, wantUpstreams) {
 		t.Errorf("default upstream = %#v, want %#v", cfg.Upstream, wantUpstreams)
+	}
+
+	if !cfg.UI.Enable {
+		t.Error("default ui.enable = false, want true")
 	}
 }
