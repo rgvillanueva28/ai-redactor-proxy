@@ -1,0 +1,43 @@
+# --- Go build artifacts ---
+/redactor
+/redactor-linux-amd64
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.*
+
+# --- Go tooling ---
+/vendor/
+go.work*
+*.prof
+
+# --- IDE / editors ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# --- OS files ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Environment / secrets ---
+.env
+.env.*
+*.pem
+*.key
+
+# --- Logs ---
+*.log
+
+# --- Distribution ---
+/dist/
+/build/
