@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Redactor · Live logs</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/logs/style.css">
+  <script src="/logs/app.js" defer></script>
+</head>
+<body data-events-url="/logs/events">
+  <a class="skip-link" href="#viewer">Skip to log entries</a>
+
+  <noscript>
+    <p class="noscript">The live log viewer needs JavaScript enabled.</p>
+  </noscript>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand__mark" aria-hidden="true"></span>
+      <div class="brand__text">
+        <h1>Redactor</h1>
+        <p class="brand__sub">Live log stream</p>
+      </div>
+    </div>
+
+    <div id="status" class="status" data-state="connecting" role="status" aria-live="polite">
+      <span class="status__dot" aria-hidden="true"></span>
+      <span id="status-text">Connecting…</span>
+    </div>
+
+    <span id="dropped" class="dropped" hidden></span>
+  </header>
+
+  <section class="controls" aria-label="Log filters">
+    <div class="filters" role="group" aria-label="Filter by log level">
+      <button type="button" class="filter is-active" data-level="all" aria-pressed="true">All</button>
+      <button type="button" class="filter" data-level="debug" aria-pressed="false">
+        <span class="filter__dot" aria-hidden="true"></span>Debug
+      </button>
+      <button type="button" class="filter" data-level="info" aria-pressed="false">
+        <span class="filter__dot" aria-hidden="true"></span>Info
+      </button>
+      <button type="button" class="filter" data-level="warn" aria-pressed="false">
+        <span class="filter__dot" aria-hidden="true"></span>Warn
+      </button>
+      <button type="button" class="filter" data-level="error" aria-pressed="false">
+        <span class="filter__dot" aria-hidden="true"></span>Error
+      </button>
+    </div>
+
+    <label class="search">
+      <span class="visually-hidden">Search logs</span>
+      <svg class="search__icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+        <path d="M7 1a6 6 0 1 0 3.7 10.7l3.3 3.3 1.4-1.4-3.3-3.3A6 6 0 0 0 7 1Zm0 2a4 4 0 1 1 0 8 4 4 0 0 1 0-8Z" fill="currentColor"/>
+      </svg>
+      <input id="search" type="search" placeholder="Search logs…" autocomplete="off" spellcheck="false" aria-label="Search logs" title="Press / to search">
+    </label>
+
+    <div class="actions">
+      <button id="autoscroll" class="button" type="button" aria-pressed="true">Pause</button>
+      <button id="clear" class="button" type="button">Clear</button>
+    </div>
+  </section>
+
+  <div class="meta">
+    <span id="stats" class="meta__stats" aria-live="off">No entries</span>
+    <span class="meta__hint">Streaming from <code>/logs/events</code></span>
+  </div>
+
+  <main class="viewer-wrap">
+    <div id="viewer" class="viewer" role="log" aria-live="polite" aria-relevant="additions" tabindex="0"></div>
+    <div id="empty" class="empty">
+      <p id="empty-text">Waiting for log entries…</p>
+    </div>
+  </main>
+</body>
+</html>
