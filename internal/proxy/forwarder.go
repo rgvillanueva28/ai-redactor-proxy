@@ -153,9 +153,9 @@ func (f *Forwarder) Forward(ctx context.Context, req *http.Request, upstreamURL 
 	// Upstream virtual hosting expects its own Host header.
 	out.Host = base.Host
 	out.Close = false
-	// Replace the cloned header map with one that omits hop-by-hop headers and
-	// Content-Length; the transport writes Content-Length from
-	// out.ContentLength, so building the string here would be wasted work.
+	// Replace the cloned header map with one that omits hop-by-hop headers,
+	// Content-Length and Accept-Encoding; the transport writes Content-Length
+	// from out.ContentLength, so building the string here would be wasted work.
 	out.Header = forwardableHeaders(req.Header)
 
 	if req.Body != nil && req.Body != http.NoBody {
@@ -234,10 +234,13 @@ func (b *poolBody) Close() error {
 	return nil
 }
 
-// forwardableHeaders returns a copy of src without hop-by-hop headers and
-// without Content-Length. Header value slices are shared with src, which is
-// safe because net/http only reads request headers; sharing avoids allocating
-// a fresh slice per header on the proxy hot path.
+// forwardableHeaders returns a copy of src without hop-by-hop headers, without
+// Content-Length and without Accept-Encoding. Accept-Encoding is dropped so the
+// upstream always returns an uncompressed body: the transport runs with
+// DisableCompression, so a compressed response could not be parsed as JSON.
+// Header value slices are shared with src, which is safe because net/http only
+// reads request headers; sharing avoids allocating a fresh slice per header on
+// the proxy hot path.
 func forwardableHeaders(src http.Header) http.Header {
 	dst := make(http.Header, len(src))
 	var drop map[string]bool
@@ -253,7 +256,7 @@ func forwardableHeaders(src http.Header) http.Header {
 	}
 	for name, values := range src {
 		canonical := http.CanonicalHeaderKey(name)
-		if isHopByHopHeader(canonical) || canonical == "Content-Length" || drop[canonical] {
+		if isHopByHopHeader(canonical) || canonical == "Content-Length" || canonical == "Accept-Encoding" || drop[canonical] {
 			continue
 		}
 		dst[canonical] = values
