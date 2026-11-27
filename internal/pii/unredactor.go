@@ -14,9 +14,16 @@ func NewUnredactor() *Unredactor {
 	return &Unredactor{}
 }
 
-// Unredact replaces all placeholders in text with their original values from
-// the mapping. Placeholders are applied longest-first so that "<EMAIL_1>" is
-// never matched inside "<EMAIL_10>". Unknown placeholders are left as-is.
+// Unredact replaces every mapping key in text with its original value. Keys are
+// either generated placeholders ("<EMAIL_1>") or the fixed text a category was
+// configured with in custom replacement mode ("[EMAIL]"); the unredactor treats
+// both identically, so mixed-mode mappings restore transparently.
+//
+// Keys are applied longest-first, so "<EMAIL_1>" is never matched inside
+// "<EMAIL_10>" and a custom replacement that embeds placeholder-shaped text
+// (for example "[<EMAIL_1>]") is restored whole. Replacement happens in a single
+// pass, so a restored original is never scanned again even if it contains text
+// that looks like a mapping key. Unknown keys are left as-is.
 func (u *Unredactor) Unredact(text string, m *Mapping) string {
 	if text == "" || m == nil {
 		return text
