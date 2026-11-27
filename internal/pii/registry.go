@@ -1,6 +1,8 @@
 package pii
 
 import (
+	"strings"
+
 	"github.com/local/redactor/internal/config"
 	"github.com/local/redactor/internal/pii/detectors"
 )
@@ -13,51 +15,94 @@ type Registry struct {
 	unredactor *Unredactor
 }
 
+// categorySpec describes one detector to wire: its category, the flat enable
+// toggle, the matching per-category customization block, and a constructor.
+type categorySpec struct {
+	category Category
+	flat     bool
+	cfg      config.CategoryConfig
+	build    func() (Detector, error)
+}
+
 // NewRegistry builds a Registry from cfg.
 //
 // Detectors are appended in a fixed order (email, phone, credit card, SSN, IP,
-// path, API key, domain, client name, person name) so that placeholder
-// numbering is deterministic for a given config and text. The Phase 1-2
-// detectors come first so that adding the newer categories did not renumber
-// existing placeholders. Client names need a configured list to be worth
-// wiring; person names are opt-in because the heuristic is noisy.
+// path, API key, credential, domain, client name, person name) so that
+// placeholder numbering is deterministic for a given config and text. The
+// Phase 1-2 detectors come first so that adding the newer categories did not
+// renumber existing placeholders. Client names need a configured list or
+// pattern to be worth wiring; person names are opt-in because the heuristic is
+// noisy.
+//
+// Each category's [pii.<category>] block can override the flat enable toggle,
+// add literal names and regex patterns, and suppress values with a denylist.
+// A detector is only wrapped when its block actually adds something.
 func NewRegistry(cfg *config.Config) (*Registry, error) {
 	var ds []Detector
 	if cfg != nil {
 		p := cfg.PII
-		if p.EnableEmail {
-			ds = append(ds, detectors.NewEmail())
+		clientCfg := mergedClientConfig(p)
+
+		specs := []categorySpec{
+			{CategoryEmail, p.EnableEmail, p.Email, func() (Detector, error) {
+				return detectors.NewEmail(), nil
+			}},
+			{CategoryPhone, p.EnablePhone, p.Phone, func() (Detector, error) {
+				return detectors.NewPhone(), nil
+			}},
+			{CategoryCreditCard, p.EnableCreditCard, p.CreditCard, func() (Detector, error) {
+				return detectors.NewCreditCard(), nil
+			}},
+			{CategorySSN, p.EnableSSN, p.SSN, func() (Detector, error) {
+				return detectors.NewSSN(), nil
+			}},
+			{CategoryIP, p.EnableIP, p.IP, func() (Detector, error) {
+				return detectors.NewIP(), nil
+			}},
+			{CategoryPath, p.EnablePath, p.Path, func() (Detector, error) {
+				return detectors.NewPath(), nil
+			}},
+			{CategoryAPIKey, p.EnableAPIKey, p.APIKey, func() (Detector, error) {
+				return detectors.NewAPIKey(), nil
+			}},
+			{CategoryCredential, p.EnableCredential, p.Credential, func() (Detector, error) {
+				return detectors.NewCredential(), nil
+			}},
+			{CategoryDomain, p.EnableDomain, p.Domain, func() (Detector, error) {
+				return detectors.NewDomain(), nil
+			}},
+			{CategoryClientName, p.EnableClientName, clientCfg, func() (Detector, error) {
+				return detectors.NewClientName(clientCfg.Names)
+			}},
+			{CategoryPersonName, p.EnablePersonName, p.PersonName, func() (Detector, error) {
+				return detectors.NewPersonName(), nil
+			}},
 		}
-		if p.EnablePhone {
-			ds = append(ds, detectors.NewPhone())
-		}
-		if p.EnableCreditCard {
-			ds = append(ds, detectors.NewCreditCard())
-		}
-		if p.EnableSSN {
-			ds = append(ds, detectors.NewSSN())
-		}
-		if p.EnableIP {
-			ds = append(ds, detectors.NewIP())
-		}
-		if p.EnablePath {
-			ds = append(ds, detectors.NewPath())
-		}
-		if p.EnableAPIKey {
-			ds = append(ds, detectors.NewAPIKey())
-		}
-		if p.EnableDomain {
-			ds = append(ds, detectors.NewDomain())
-		}
-		if p.EnableClientName && len(p.ClientNames.Names) > 0 {
-			clientNames, err := detectors.NewClientName(p.ClientNames.Names)
+
+		for _, s := range specs {
+			if !config.ResolveEnabled(s.cfg, s.flat) {
+				continue
+			}
+			// The client-name detector needs at least one literal name or
+			// custom pattern to produce anything; an empty dictionary would
+			// only add a no-op pass over every request.
+			if s.category == CategoryClientName && len(s.cfg.Names) == 0 && len(s.cfg.Patterns) == 0 {
+				continue
+			}
+
+			base, err := s.build()
 			if err != nil {
 				return nil, err
 			}
-			ds = append(ds, clientNames)
-		}
-		if p.EnablePersonName {
-			ds = append(ds, detectors.NewPersonName())
+
+			det := base
+			if needsCustomization(base, s.cfg) {
+				det, err = wrapDetector(base, s.cfg)
+				if err != nil {
+					return nil, err
+				}
+			}
+			ds = append(ds, det)
 		}
 	}
 
@@ -66,6 +111,34 @@ func NewRegistry(cfg *config.Config) (*Registry, error) {
 		redactor:   NewRedactor(ds),
 		unredactor: NewUnredactor(),
 	}, nil
+}
+
+// mergedClientConfig folds the deprecated [pii.client_names] list into the
+// [pii.client] block. parse() already does this for loaded files, but callers
+// that build a config value directly (tests, embedders) bypass parse and still
+// expect the legacy list to work.
+func mergedClientConfig(p config.PIIConfig) config.CategoryConfig {
+	client := p.Client
+	if len(p.ClientNames.Names) == 0 {
+		return client
+	}
+
+	seen := make(map[string]struct{}, len(client.Names)+len(p.ClientNames.Names))
+	for _, name := range client.Names {
+		seen[strings.ToLower(strings.TrimSpace(name))] = struct{}{}
+	}
+	for _, name := range p.ClientNames.Names {
+		key := strings.ToLower(strings.TrimSpace(name))
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		client.Names = append(client.Names, name)
+		seen[key] = struct{}{}
+	}
+	return client
 }
 
 // Redactor returns the configured Redactor.

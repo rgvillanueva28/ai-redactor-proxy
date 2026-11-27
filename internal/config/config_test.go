@@ -312,6 +312,26 @@ func TestDefaultConfig(t *testing.T) {
 		t.Errorf("default client names = %#v, want empty", pii.ClientNames.Names)
 	}
 
+	// Per-category override blocks default to the zero value: no enable
+	// override, and no names, patterns, or denylist entries.
+	for name, cat := range map[string]CategoryConfig{
+		"email":       pii.Email,
+		"phone":       pii.Phone,
+		"credit_card": pii.CreditCard,
+		"ssn":         pii.SSN,
+		"ip":          pii.IP,
+		"path":        pii.Path,
+		"api_key":     pii.APIKey,
+		"domain":      pii.Domain,
+		"client":      pii.Client,
+		"credential":  pii.Credential,
+		"person_name": pii.PersonName,
+	} {
+		if cat.Enabled != nil || len(cat.Names) != 0 || len(cat.Patterns) != 0 || len(cat.Denylist) != 0 {
+			t.Errorf("default [pii.%s] = %#v, want zero value", name, cat)
+		}
+	}
+
 	wantUpstreams := map[string]UpstreamConfig{
 		"openai":    {HostMatch: "api.openai.com", BaseURL: "https://api.openai.com"},
 		"anthropic": {HostMatch: "api.anthropic.com", BaseURL: "https://api.anthropic.com"},
@@ -326,5 +346,129 @@ func TestDefaultConfig(t *testing.T) {
 
 	if !cfg.UI.Enable {
 		t.Error("default ui.enable = false, want true")
+	}
+}
+
+func boolPtr(v bool) *bool { return &v }
+
+func TestParsePerCategoryBlocks(t *testing.T) {
+	cfg, err := parse([]byte(`
+[pii.email]
+enabled = false
+names = ["a@b.com"]
+patterns = ["\\bX\\d+\\b"]
+denylist = ["y@z.com"]
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	email := cfg.PII.Email
+	if email.Enabled == nil {
+		t.Fatal("pii.email.enabled = nil, want explicit false")
+	}
+	if *email.Enabled {
+		t.Error("pii.email.enabled = true, want false")
+	}
+	if want := []string{"a@b.com"}; !reflect.DeepEqual(email.Names, want) {
+		t.Errorf("pii.email.names = %#v, want %#v", email.Names, want)
+	}
+	if want := []string{`\bX\d+\b`}; !reflect.DeepEqual(email.Patterns, want) {
+		t.Errorf("pii.email.patterns = %#v, want %#v", email.Patterns, want)
+	}
+	if want := []string{"y@z.com"}; !reflect.DeepEqual(email.Denylist, want) {
+		t.Errorf("pii.email.denylist = %#v, want %#v", email.Denylist, want)
+	}
+
+	// Categories without a block stay at their zero value.
+	if cfg.PII.Phone.Enabled != nil {
+		t.Error("pii.phone.enabled = non-nil, want nil (unset)")
+	}
+	if len(cfg.PII.Phone.Names) != 0 || len(cfg.PII.Phone.Patterns) != 0 || len(cfg.PII.Phone.Denylist) != 0 {
+		t.Errorf("pii.phone = %#v, want zero value", cfg.PII.Phone)
+	}
+
+	// Flat toggles are unaffected by per-category blocks.
+	if !cfg.PII.EnableEmail {
+		t.Error("enable_email = false, want default true")
+	}
+}
+
+func TestParsePerCategoryNamesOnly(t *testing.T) {
+	cfg, err := parse([]byte(`
+[pii.email]
+names = ["x@y.com"]
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.PII.Email.Enabled != nil {
+		t.Error("pii.email.enabled = non-nil, want nil (unset)")
+	}
+	if want := []string{"x@y.com"}; !reflect.DeepEqual(cfg.PII.Email.Names, want) {
+		t.Errorf("pii.email.names = %#v, want %#v", cfg.PII.Email.Names, want)
+	}
+}
+
+func TestParseLegacyClientNamesMerged(t *testing.T) {
+	cfg, err := parse([]byte(`
+[pii.client_names]
+names = ["Acme", "Project Phoenix"]
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	want := []string{"Acme", "Project Phoenix"}
+	if !reflect.DeepEqual(cfg.PII.Client.Names, want) {
+		t.Errorf("pii.client.names = %#v, want %#v", cfg.PII.Client.Names, want)
+	}
+	// The legacy field itself is left intact for callers that still read it.
+	if !reflect.DeepEqual(cfg.PII.ClientNames.Names, want) {
+		t.Errorf("pii.client_names.names = %#v, want %#v", cfg.PII.ClientNames.Names, want)
+	}
+}
+
+func TestParseLegacyClientNamesAppendedAfterNewBlock(t *testing.T) {
+	cfg, err := parse([]byte(`
+[pii.client]
+names = ["Globex"]
+enabled = true
+
+[pii.client_names]
+names = ["Acme"]
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	want := []string{"Globex", "Acme"}
+	if !reflect.DeepEqual(cfg.PII.Client.Names, want) {
+		t.Errorf("pii.client.names = %#v, want %#v", cfg.PII.Client.Names, want)
+	}
+	if cfg.PII.Client.Enabled == nil || !*cfg.PII.Client.Enabled {
+		t.Error("pii.client.enabled = nil or false, want explicit true")
+	}
+}
+
+func TestResolveEnabled(t *testing.T) {
+	tests := []struct {
+		name       string
+		override   *bool
+		flatToggle bool
+		want       bool
+	}{
+		{name: "nil falls back to enabled flat toggle", override: nil, flatToggle: true, want: true},
+		{name: "nil falls back to disabled flat toggle", override: nil, flatToggle: false, want: false},
+		{name: "true overrides disabled flat toggle", override: boolPtr(true), flatToggle: false, want: true},
+		{name: "false overrides enabled flat toggle", override: boolPtr(false), flatToggle: true, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ResolveEnabled(CategoryConfig{Enabled: tt.override}, tt.flatToggle)
+			if got != tt.want {
+				t.Errorf("ResolveEnabled(flat=%v) = %v, want %v", tt.flatToggle, got, tt.want)
+			}
+		})
 	}
 }

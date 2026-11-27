@@ -24,24 +24,71 @@ type ListenConfig struct {
 // PIIConfig toggles individual PII detectors and configures static data used
 // by them.
 type PIIConfig struct {
-	EnableEmail      bool              `toml:"enable_email"`
-	EnablePhone      bool              `toml:"enable_phone"`
-	EnableCreditCard bool              `toml:"enable_creditcard"`
-	EnableSSN        bool              `toml:"enable_ssn"`
-	EnableIP         bool              `toml:"enable_ip"`
-	EnablePath       bool              `toml:"enable_path"`
-	EnableAPIKey     bool              `toml:"enable_apikey"`
-	EnableDomain     bool              `toml:"enable_domain"`
-	EnablePersonName bool              `toml:"enable_person_name"`
-	EnableClientName bool              `toml:"enable_client_name"`
-	ClientNames      ClientNamesConfig `toml:"client_names"`
-	LogRedacted      bool              `toml:"log_redacted"`
-	LogBodies        bool              `toml:"log_bodies"`
+	EnableEmail      bool `toml:"enable_email"`
+	EnablePhone      bool `toml:"enable_phone"`
+	EnableCreditCard bool `toml:"enable_creditcard"`
+	EnableSSN        bool `toml:"enable_ssn"`
+	EnableIP         bool `toml:"enable_ip"`
+	EnablePath       bool `toml:"enable_path"`
+	EnableAPIKey     bool `toml:"enable_apikey"`
+	EnableCredential bool `toml:"enable_credential"`
+	EnableDomain     bool `toml:"enable_domain"`
+	EnablePersonName bool `toml:"enable_person_name"`
+	EnableClientName bool `toml:"enable_client_name"`
+
+	// Per-category overrides, one TOML block each. A block may replace the
+	// flat enable toggle, add literal names, add regex patterns, and list
+	// values that must never be redacted.
+	Email      CategoryConfig `toml:"email"`
+	Phone      CategoryConfig `toml:"phone"`
+	CreditCard CategoryConfig `toml:"credit_card"`
+	SSN        CategoryConfig `toml:"ssn"`
+	IP         CategoryConfig `toml:"ip"`
+	Path       CategoryConfig `toml:"path"`
+	APIKey     CategoryConfig `toml:"api_key"`
+	Domain     CategoryConfig `toml:"domain"`
+	Client     CategoryConfig `toml:"client"`
+	Credential CategoryConfig `toml:"credential"`
+	PersonName CategoryConfig `toml:"person_name"`
+
+	// ClientNames is the legacy [pii.client_names] block. Its names are
+	// merged into Client.Names during parse.
+	ClientNames ClientNamesConfig `toml:"client_names"`
+
+	LogRedacted bool `toml:"log_redacted"`
+	LogBodies   bool `toml:"log_bodies"`
+}
+
+// CategoryConfig customizes a single PII category. Enabled is a pointer so an
+// omitted key (nil) can be distinguished from an explicit false.
+type CategoryConfig struct {
+	Enabled  *bool    `toml:"enabled"`
+	Names    []string `toml:"names"`
+	Patterns []string `toml:"patterns"`
+	Denylist []string `toml:"denylist"`
 }
 
 // ClientNamesConfig holds literal client names that must always be redacted.
 type ClientNamesConfig struct {
 	Names []string `toml:"names"`
+}
+
+// ResolveEnabled returns the effective enabled state for a category. If the
+// per-category block sets Enabled, it wins; otherwise the flat toggle is used.
+func ResolveEnabled(cat CategoryConfig, flatToggle bool) bool {
+	if cat.Enabled != nil {
+		return *cat.Enabled
+	}
+	return flatToggle
+}
+
+// MergeLegacyClientNames folds the deprecated [pii.client_names] list into
+// [pii.client].names, keeping any names supplied in the new block first.
+func MergeLegacyClientNames(pii *PIIConfig) {
+	if len(pii.ClientNames.Names) == 0 {
+		return
+	}
+	pii.Client.Names = append(pii.Client.Names, pii.ClientNames.Names...)
 }
 
 // UpstreamConfig describes one upstream provider.
@@ -59,7 +106,9 @@ type UIConfig struct {
 }
 
 // DefaultConfig returns the default configuration. Values match the documented
-// sample TOML.
+// sample TOML. Per-category override blocks default to their zero value, so
+// every category starts with no names, patterns, or denylist entries and no
+// explicit enable override.
 func DefaultConfig() *Config {
 	return &Config{
 		Listen: ListenConfig{Address: "127.0.0.1:8443"},
@@ -71,6 +120,7 @@ func DefaultConfig() *Config {
 			EnableIP:         true,
 			EnablePath:       true,
 			EnableAPIKey:     true,
+			EnableCredential: true,
 			EnableDomain:     true,
 			EnablePersonName: false,
 			EnableClientName: true,
@@ -120,5 +170,6 @@ func parse(data []byte) (*Config, error) {
 	if _, err := toml.Decode(string(data), cfg); err != nil {
 		return nil, err
 	}
+	MergeLegacyClientNames(&cfg.PII)
 	return cfg, nil
 }

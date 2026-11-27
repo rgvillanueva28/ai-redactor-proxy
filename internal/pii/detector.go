@@ -26,6 +26,7 @@ const (
 	CategoryIP         = core.CategoryIP
 	CategoryPath       = core.CategoryPath
 	CategoryAPIKey     = core.CategoryAPIKey
+	CategoryCredential = core.CategoryCredential
 	CategoryDomain     = core.CategoryDomain
 	CategoryClientName = core.CategoryClientName
 	CategoryPersonName = core.CategoryPersonName

@@ -15,6 +15,7 @@ const (
 	CategoryIP         Category = "IP"
 	CategoryPath       Category = "PATH"
 	CategoryAPIKey     Category = "APIKEY"
+	CategoryCredential Category = "CRED"
 	CategoryDomain     Category = "DOMAIN"
 	CategoryClientName Category = "CLIENT"
 	CategoryPersonName Category = "NAME"
