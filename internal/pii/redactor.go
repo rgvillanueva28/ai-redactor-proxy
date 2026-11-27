@@ -38,11 +38,36 @@ type candidate struct {
 	order int
 }
 
+// RedactMatch describes one accepted redaction: the matched span in the input,
+// its category, and the placeholder written in its place. Replacement is the
+// same placeholder the corresponding Mapping entry resolves.
+type RedactMatch struct {
+	Category    Category
+	Start       int // byte offset inclusive
+	End         int // byte offset exclusive
+	Replacement string
+}
+
 // Redact applies detectors to text. Overlapping matches: leftmost wins; on
 // tie, longer wins; on tie, first detector in list wins. It returns the
 // redacted text and the populated Mapping, which the caller owns (and may
 // return to the pool with PutMapping once the request is finished).
 func (r *Redactor) Redact(text string) (string, *Mapping) {
+	redacted, _, mapping := r.redact(text, false)
+	return redacted, mapping
+}
+
+// RedactWithMatches is like Redact but also reports the accepted matches in the
+// order they appear in text. It is meant for callers that need to show what was
+// redacted, such as a configuration preview; the proxy's hot path uses Redact
+// to avoid the extra slice.
+func (r *Redactor) RedactWithMatches(text string) (string, []RedactMatch, *Mapping) {
+	return r.redact(text, true)
+}
+
+// redact is the shared implementation of Redact and RedactWithMatches. When
+// collect is false it skips building the match slice.
+func (r *Redactor) redact(text string, collect bool) (string, []RedactMatch, *Mapping) {
 	mapping := GetMapping()
 
 	// Take a snapshot of the slice header under the read lock and release it
@@ -81,6 +106,11 @@ func (r *Redactor) Redact(text string) (string, *Mapping) {
 	var b strings.Builder
 	b.Grow(len(text))
 
+	var matches []RedactMatch
+	if collect {
+		matches = make([]RedactMatch, 0, len(candidates))
+	}
+
 	cursor := 0
 	for _, c := range candidates {
 		if c.match.Start < cursor {
@@ -88,10 +118,19 @@ func (r *Redactor) Redact(text string) (string, *Mapping) {
 			continue
 		}
 		b.WriteString(text[cursor:c.match.Start])
-		b.WriteString(mapping.Add(c.match.Category, text[c.match.Start:c.match.End]))
+		replacement := mapping.Add(c.match.Category, text[c.match.Start:c.match.End])
+		b.WriteString(replacement)
+		if collect {
+			matches = append(matches, RedactMatch{
+				Category:    c.match.Category,
+				Start:       c.match.Start,
+				End:         c.match.End,
+				Replacement: replacement,
+			})
+		}
 		cursor = c.match.End
 	}
 	b.WriteString(text[cursor:])
 
-	return b.String(), mapping
+	return b.String(), matches, mapping
 }

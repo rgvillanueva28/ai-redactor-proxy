@@ -44,6 +44,62 @@ func TestRedactSingleMatch(t *testing.T) {
 	}
 }
 
+func TestRedactWithMatchesReportsSpans(t *testing.T) {
+	text := "contact alice@example.com or bob@example.net now"
+	alice := strings.Index(text, "alice@example.com")
+	bob := strings.Index(text, "bob@example.net")
+	d := mockDetector{
+		cat: CategoryEmail,
+		matches: []Match{
+			{Start: bob, End: bob + len("bob@example.net"), Category: CategoryEmail},
+			{Start: alice, End: alice + len("alice@example.com"), Category: CategoryEmail},
+		},
+	}
+
+	got, matches, mapping := NewRedactor([]Detector{d}).RedactWithMatches(text)
+	defer PutMapping(mapping)
+
+	if want := "contact <EMAIL_1> or <EMAIL_2> now"; got != want {
+		t.Fatalf("redacted = %q, want %q", got, want)
+	}
+	if len(matches) != 2 {
+		t.Fatalf("matches = %d, want 2", len(matches))
+	}
+	// Matches are reported in output order, not detector order.
+	want := []RedactMatch{
+		{Category: CategoryEmail, Start: alice, End: alice + len("alice@example.com"), Replacement: "<EMAIL_1>"},
+		{Category: CategoryEmail, Start: bob, End: bob + len("bob@example.net"), Replacement: "<EMAIL_2>"},
+	}
+	for i, w := range want {
+		if matches[i] != w {
+			t.Errorf("match %d = %+v, want %+v", i, matches[i], w)
+		}
+	}
+
+	// Redact must produce the same text and mapping.
+	plain, plainMapping := NewRedactor([]Detector{d}).Redact(text)
+	defer PutMapping(plainMapping)
+	if plain != got {
+		t.Errorf("Redact = %q, RedactWithMatches = %q", plain, got)
+	}
+	if len(plainMapping.All()) != len(mapping.All()) {
+		t.Errorf("mapping sizes differ: %d vs %d", len(plainMapping.All()), len(mapping.All()))
+	}
+}
+
+func TestRedactWithMatchesNoMatches(t *testing.T) {
+	text := "nothing to redact here"
+	got, matches, mapping := NewRedactor(nil).RedactWithMatches(text)
+	defer PutMapping(mapping)
+
+	if got != text {
+		t.Fatalf("redacted = %q, want %q", got, text)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("matches = %+v, want none", matches)
+	}
+}
+
 func TestRedactMultipleMatchesSameCategory(t *testing.T) {
 	text := "a@x.io b@y.io c@z.io"
 	d := mockDetector{
