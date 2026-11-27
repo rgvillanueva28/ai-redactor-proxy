@@ -4,7 +4,9 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"sync"
 
+	"github.com/local/redactor/internal/config"
 	"github.com/local/redactor/internal/pii"
 	"github.com/local/redactor/internal/proxy"
 )
@@ -14,10 +16,15 @@ import (
 // matching provider handler. Falls back to GenericHandler for unknown
 // providers (with a warning log).
 //
-// An Adapter is stateless and safe for concurrent use: the provider handlers it
-// owns carry only the immutable redactor/unredactor pair, and all per-request
-// state travels on the request context.
+// An Adapter is stateless with respect to requests and safe for concurrent use:
+// the provider handlers it owns carry only the immutable redactor/unredactor
+// pair, and all per-request state travels on the request context. The handler
+// set can still be replaced at runtime by SetLogToggles, which is why access to
+// it is guarded by a mutex.
 type Adapter struct {
+	mu          sync.RWMutex
+	redactor    *pii.Redactor
+	unredactor  *pii.Unredactor
 	openai      *OpenAIHandler
 	anthropic   *AnthropicHandler
 	gemini      *GeminiHandler
@@ -39,6 +46,8 @@ var (
 // response bodies are logged at debug level at every transformation stage.
 func NewAdapter(r *pii.Redactor, u *pii.Unredactor, logRedacted bool, logBodies bool) *Adapter {
 	return &Adapter{
+		redactor:    r,
+		unredactor:  u,
 		openai:      NewOpenAIHandler(r, u, logRedacted, logBodies),
 		anthropic:   NewAnthropicHandler(r, u, logRedacted, logBodies),
 		gemini:      NewGeminiHandler(r, u, logRedacted, logBodies),
@@ -48,12 +57,52 @@ func NewAdapter(r *pii.Redactor, u *pii.Unredactor, logRedacted bool, logBodies 
 	}
 }
 
+// SetLogToggles replaces the adapter's logging toggles and rebuilds the
+// per-provider handlers so subsequent requests observe the new values. It is
+// safe to call while requests are in flight: a request already inside a handler
+// finishes against the old handler, and every later request dispatches through
+// the new one.
+func (a *Adapter) SetLogToggles(logRedacted, logBodies bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.logRedacted == logRedacted && a.logBodies == logBodies {
+		return
+	}
+
+	a.logRedacted = logRedacted
+	a.logBodies = logBodies
+	a.openai = NewOpenAIHandler(a.redactor, a.unredactor, logRedacted, logBodies)
+	a.anthropic = NewAnthropicHandler(a.redactor, a.unredactor, logRedacted, logBodies)
+	a.gemini = NewGeminiHandler(a.redactor, a.unredactor, logRedacted, logBodies)
+	a.generic = NewGenericHandler(a.redactor, a.unredactor, logRedacted, logBodies)
+}
+
+// ReloadConfig applies cfg to the running proxy: reg rebuilds its detector set
+// and redactor swaps it in atomically, and a adopts the new logging toggles. It
+// is the one call the configuration HTTP API needs after validating and saving
+// a new config. A nil reg or a skips that half of the update.
+func ReloadConfig(reg *pii.Registry, a *Adapter, cfg *config.Config) error {
+	if reg != nil {
+		if err := reg.Reload(cfg); err != nil {
+			return err
+		}
+	}
+	if a != nil && cfg != nil {
+		a.SetLogToggles(cfg.PII.LogRedacted, cfg.PII.LogBodies)
+	}
+	return nil
+}
+
 // handlerFor returns the provider-specific handler for the provider stored in
 // ctx.
 func (a *Adapter) handlerFor(ctx context.Context) interface {
 	proxy.RequestMutator
 	proxy.ResponseMutator
 } {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
 	switch proxy.ContextProvider(ctx) {
 	case proxy.ProviderOpenAI:
 		return a.openai
