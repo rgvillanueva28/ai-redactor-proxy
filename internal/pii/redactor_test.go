@@ -599,6 +599,58 @@ func TestRedactOverlap_APIKeyVsGeneric(t *testing.T) {
 	})
 }
 
+// TestRedactCredentialPlaceholderInMixedOutput checks that a credential in a
+// mixed-PII sentence is replaced by a CRED placeholder and still restores, with
+// the surrounding email redacted independently.
+func TestRedactCredentialPlaceholderInMixedOutput(t *testing.T) {
+	reg := mixedPIIRegistry(t)
+
+	text := "login with password=hunter2 then mail foo@bar.com"
+	redacted, mapping := reg.Redactor().Redact(text)
+	defer PutMapping(mapping)
+
+	want := "login with password=<CRED_1> then mail <EMAIL_1>"
+	if redacted != want {
+		t.Fatalf("Redact = %q, want %q", redacted, want)
+	}
+	if !strings.Contains(redacted, "<CRED_1>") {
+		t.Fatalf("redacted output is missing the CRED placeholder: %q", redacted)
+	}
+	if got, ok := mapping.Lookup("<CRED_1>"); !ok || got != "hunter2" {
+		t.Fatalf("Lookup(<CRED_1>) = (%q, %v), want (hunter2, true)", got, ok)
+	}
+	if restored := reg.Unredactor().Unredact(redacted, mapping); restored != text {
+		t.Fatalf("round trip = %q, want %q", restored, text)
+	}
+}
+
+// TestRedactDenylistSuppressesDomainInPipeline checks the full redaction
+// pipeline (registry configuration through the redactor) leaves a denylisted
+// domain alone while continuing to redact other domains.
+func TestRedactDenylistSuppressesDomainInPipeline(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.PII.Domain.Denylist = []string{"example.com"}
+
+	reg, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	text := "see example.com and acme.io but not example.org"
+	redacted, mapping := reg.Redactor().Redact(text)
+	defer PutMapping(mapping)
+
+	want := "see example.com and <DOMAIN_1> but not <DOMAIN_2>"
+	if redacted != want {
+		t.Fatalf("Redact = %q, want %q", redacted, want)
+	}
+	for placeholder, original := range mapping.All() {
+		if original == "example.com" {
+			t.Fatalf("denylisted domain kept a placeholder: %s", placeholder)
+		}
+	}
+}
+
 // BenchmarkRedactor measures one full redact cycle (detect, resolve overlaps,
 // build placeholders) over the 10 KB mixed-PII fixture and returns the mapping
 // to the pool, so the figure reflects steady-state request handling.

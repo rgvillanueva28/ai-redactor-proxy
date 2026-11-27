@@ -354,6 +354,128 @@ func TestNewRegistryRedactsAndRestoresMixedText(t *testing.T) {
 	}
 }
 
+// TestCredentialRedactionEndToEnd drives the default configuration through the
+// registry and checks that a credential is reported as its own category and
+// restored on the way back. The credential is interleaved with an email and a
+// domain so the placeholder numbering is exercised per category.
+func TestCredentialRedactionEndToEnd(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.PII.EnableCredential = true
+	if !cfg.PII.EnableCredential {
+		t.Fatal("enable_credential = false, want true")
+	}
+
+	r, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	if d := findDetector(r, CategoryCredential); d == nil {
+		t.Fatal("credential detector not wired by default")
+	}
+
+	text := "mail ops@acme.io with password=hunter2 then visit acme.io"
+	redacted, mapping := r.Redactor().Redact(text)
+	defer PutMapping(mapping)
+
+	want := "mail <EMAIL_1> with password=<CRED_1> then visit <DOMAIN_1>"
+	if redacted != want {
+		t.Fatalf("Redact = %q, want %q", redacted, want)
+	}
+	if got, ok := mapping.Lookup("<CRED_1>"); !ok || got != "hunter2" {
+		t.Fatalf("Lookup(<CRED_1>) = (%q, %v), want (hunter2, true)", got, ok)
+	}
+	if restored := r.Unredactor().Unredact(redacted, mapping); restored != text {
+		t.Fatalf("round trip = %q, want %q", restored, text)
+	}
+}
+
+// TestDenylistOverride verifies that a per-category denylist removes a match the
+// base detector would otherwise report, while other values in the same
+// category are still redacted.
+func TestDenylistOverride(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.PII.Domain.Denylist = []string{"example.com"}
+
+	r, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	text := "visit example.com and acme.io"
+	redacted, mapping := r.Redactor().Redact(text)
+	defer PutMapping(mapping)
+
+	want := "visit example.com and <DOMAIN_1>"
+	if redacted != want {
+		t.Fatalf("Redact = %q, want %q", redacted, want)
+	}
+	for placeholder, original := range mapping.All() {
+		if original == "example.com" {
+			t.Fatalf("denylisted value kept a placeholder: %s", placeholder)
+		}
+	}
+	if got, ok := mapping.Lookup("<DOMAIN_1>"); !ok || got != "acme.io" {
+		t.Fatalf("Lookup(<DOMAIN_1>) = (%q, %v), want (acme.io, true)", got, ok)
+	}
+}
+
+// TestCustomNamesOnEmail verifies that [pii.email].names values are redacted as
+// EMAIL placeholders: both a literal address the base detector also recognises
+// and a non-address label that only the configured dictionary can supply.
+func TestCustomNamesOnEmail(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.PII.Email.Names = []string{"specific@corp.io", "Corporate Mailbox"}
+
+	r, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	d := findDetector(r, CategoryEmail)
+	if _, ok := d.(*customizingDetector); !ok {
+		t.Fatalf("email detector = %T, want *customizingDetector", d)
+	}
+
+	text := "write to specific@corp.io or Corporate Mailbox today"
+	redacted, mapping := r.Redactor().Redact(text)
+	defer PutMapping(mapping)
+
+	want := "write to <EMAIL_1> or <EMAIL_2> today"
+	if redacted != want {
+		t.Fatalf("Redact = %q, want %q", redacted, want)
+	}
+	if got, ok := mapping.Lookup("<EMAIL_1>"); !ok || got != "specific@corp.io" {
+		t.Fatalf("Lookup(<EMAIL_1>) = (%q, %v), want (specific@corp.io, true)", got, ok)
+	}
+	if got, ok := mapping.Lookup("<EMAIL_2>"); !ok || got != "Corporate Mailbox" {
+		t.Fatalf("Lookup(<EMAIL_2>) = (%q, %v), want (Corporate Mailbox, true)", got, ok)
+	}
+}
+
+// TestPerCategoryEnabledOverride verifies that a per-category block wins over a
+// flat toggle that is switched on.
+func TestPerCategoryEnabledOverride(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.PII.EnableEmail = true
+	cfg.PII.Email.Enabled = boolPtr(false)
+
+	r, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	if d := findDetector(r, CategoryEmail); d != nil {
+		t.Fatalf("email detector wired despite [pii.email].enabled = false: %T", d)
+	}
+
+	text := "mail foo@bar.com with password=hunter2"
+	redacted, mapping := r.Redactor().Redact(text)
+	defer PutMapping(mapping)
+
+	want := "mail foo@bar.com with password=<CRED_1>"
+	if redacted != want {
+		t.Fatalf("Redact = %q, want %q", redacted, want)
+	}
+}
+
 func TestNewRegistryNilConfig(t *testing.T) {
 	r, err := NewRegistry(nil)
 	if err != nil {
