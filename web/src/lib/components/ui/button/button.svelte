@@ -37,7 +37,7 @@
   import type { HTMLButtonAttributes } from "svelte/elements";
   import { cn } from "$lib/utils.js";
 
-  type Props = HTMLButtonAttributes & {
+  export type ButtonProps = HTMLButtonAttributes & {
     class?: string;
     variant?: ButtonVariant;
     size?: ButtonSize;
@@ -50,7 +50,7 @@
     size = "default",
     children,
     ...restProps
-  }: Props = $props();
+  }: ButtonProps = $props();
 </script>
 
 <button
