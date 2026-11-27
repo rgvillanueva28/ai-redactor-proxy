@@ -29,7 +29,7 @@ func TestRedactSingleMatch(t *testing.T) {
 		matches: []Match{{Start: start, End: start + len("alice@example.com"), Category: CategoryEmail, Value: "alice@example.com"}},
 	}
 
-	got, mapping := NewRedactor([]Detector{d}).Redact(text)
+	got, mapping := NewRedactor([]Detector{d}, nil).Redact(text)
 
 	if want := "contact <EMAIL_1> now"; got != want {
 		t.Fatalf("redacted = %q, want %q", got, want)
@@ -54,7 +54,7 @@ func TestRedactMultipleMatchesSameCategory(t *testing.T) {
 		},
 	}
 
-	got, mapping := NewRedactor([]Detector{d}).Redact(text)
+	got, mapping := NewRedactor([]Detector{d}, nil).Redact(text)
 
 	if want := "<EMAIL_1> <EMAIL_2> <EMAIL_3>"; got != want {
 		t.Fatalf("redacted = %q, want %q", got, want)
@@ -81,7 +81,7 @@ func TestRedactCountersAreIndependentPerCategory(t *testing.T) {
 		matches: []Match{{Start: 7, End: 15, Category: CategoryIP}},
 	}
 
-	got, mapping := NewRedactor([]Detector{email, ip}).Redact(text)
+	got, mapping := NewRedactor([]Detector{email, ip}, nil).Redact(text)
 
 	if want := "<EMAIL_1> <IP_1> <EMAIL_2>"; got != want {
 		t.Fatalf("redacted = %q, want %q", got, want)
@@ -102,7 +102,7 @@ func TestRedactOverlapLeftmostWins(t *testing.T) {
 		matches: []Match{{Start: 4, End: 8, Category: CategoryIP}},
 	}
 
-	got, mapping := NewRedactor([]Detector{first, second}).Redact(text)
+	got, mapping := NewRedactor([]Detector{first, second}, nil).Redact(text)
 
 	if want := "ab<EMAIL_1>ghij"; got != want {
 		t.Fatalf("redacted = %q, want %q", got, want)
@@ -128,7 +128,7 @@ func TestRedactLongerMatchWinsAtSameStart(t *testing.T) {
 
 	// The shorter match comes first in the detector list, but the longer one
 	// must still win.
-	got, mapping := NewRedactor([]Detector{short, long}).Redact(text)
+	got, mapping := NewRedactor([]Detector{short, long}, nil).Redact(text)
 
 	if want := "<EMAIL_1>hij"; got != want {
 		t.Fatalf("redacted = %q, want %q", got, want)
@@ -149,7 +149,7 @@ func TestRedactSameStartSameLengthFirstDetectorWins(t *testing.T) {
 		matches: []Match{{Start: 0, End: 5, Category: CategoryEmail}},
 	}
 
-	got, mapping := NewRedactor([]Detector{nameDet, emailDet}).Redact(text)
+	got, mapping := NewRedactor([]Detector{nameDet, emailDet}, nil).Redact(text)
 
 	if want := "<NAME_1>fghij"; got != want {
 		t.Fatalf("redacted = %q, want %q", got, want)
@@ -162,7 +162,7 @@ func TestRedactSameStartSameLengthFirstDetectorWins(t *testing.T) {
 func TestRedactEmptyInput(t *testing.T) {
 	d := mockDetector{cat: CategoryEmail, matches: []Match{{Start: 0, End: 5, Category: CategoryEmail}}}
 
-	got, mapping := NewRedactor([]Detector{d}).Redact("")
+	got, mapping := NewRedactor([]Detector{d}, nil).Redact("")
 
 	if got != "" {
 		t.Fatalf("redacted = %q, want empty", got)
@@ -176,7 +176,7 @@ func TestRedactNoMatchesReturnsInput(t *testing.T) {
 	text := "nothing sensitive here"
 	d := mockDetector{cat: CategoryEmail}
 
-	got, mapping := NewRedactor([]Detector{d}).Redact(text)
+	got, mapping := NewRedactor([]Detector{d}, nil).Redact(text)
 
 	if got != text {
 		t.Fatalf("redacted = %q, want %q", got, text)
@@ -189,13 +189,226 @@ func TestRedactNoMatchesReturnsInput(t *testing.T) {
 func TestRedactNoDetectors(t *testing.T) {
 	text := "untouched"
 
-	got, mapping := NewRedactor(nil).Redact(text)
+	got, mapping := NewRedactor(nil, nil).Redact(text)
 
 	if got != text {
 		t.Fatalf("redacted = %q, want %q", got, text)
 	}
 	if n := len(mapping.All()); n != 0 {
 		t.Fatalf("mapping length = %d, want 0", n)
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Replacement modes: placeholder (default) and custom text
+// -----------------------------------------------------------------------------
+
+// TestRedactModes is the table-driven coverage for both replacement modes. It
+// drives the Redactor directly so each case can pin the mode configuration and
+// the resulting mapping without going through the registry.
+func TestRedactModes(t *testing.T) {
+	email := func(values ...string) Detector {
+		return literalDetector{cat: CategoryEmail, values: values}
+	}
+	ip := func(values ...string) Detector {
+		return literalDetector{cat: CategoryIP, values: values}
+	}
+
+	cases := []struct {
+		name       string
+		detectors  []Detector
+		modes      map[Category]modeConfig
+		text       string
+		want       string
+		wantLen    int
+		wantLookup map[string]string
+	}{
+		{
+			name:       "nil modes defaults to placeholder",
+			detectors:  []Detector{email("a@x.io", "b@y.io")},
+			text:       "a@x.io b@y.io",
+			want:       "<EMAIL_1> <EMAIL_2>",
+			wantLen:    2,
+			wantLookup: map[string]string{"<EMAIL_1>": "a@x.io", "<EMAIL_2>": "b@y.io"},
+		},
+		{
+			name:      "explicit placeholder mode ignores text",
+			detectors: []Detector{email("a@x.io")},
+			modes: map[Category]modeConfig{
+				CategoryEmail: {mode: modePlaceholder, text: "[ignored]"},
+			},
+			text:       "a@x.io",
+			want:       "<EMAIL_1>",
+			wantLen:    1,
+			wantLookup: map[string]string{"<EMAIL_1>": "a@x.io"},
+		},
+		{
+			name:      "custom mode uses configured text",
+			detectors: []Detector{email("a@x.io")},
+			modes: map[Category]modeConfig{
+				CategoryEmail: {mode: modeCustom, text: "[EMAIL]"},
+			},
+			text:       "mail a@x.io now",
+			want:       "mail [EMAIL] now",
+			wantLen:    1,
+			wantLookup: map[string]string{"[EMAIL]": "a@x.io"},
+		},
+		{
+			name:      "custom mode deduplicates repeated value",
+			detectors: []Detector{email("a@x.io")},
+			modes: map[Category]modeConfig{
+				CategoryEmail: {mode: modeCustom, text: "[EMAIL]"},
+			},
+			text:       "a@x.io and a@x.io",
+			want:       "[EMAIL] and [EMAIL]",
+			wantLen:    1,
+			wantLookup: map[string]string{"[EMAIL]": "a@x.io"},
+		},
+		{
+			name:      "custom mode does not advance placeholder counters",
+			detectors: []Detector{email("a@x.io", "b@y.io"), ip("10.0.0.1")},
+			modes: map[Category]modeConfig{
+				CategoryEmail: {mode: modeCustom, text: "[EMAIL]"},
+			},
+			text:       "a@x.io 10.0.0.1 b@y.io",
+			want:       "[EMAIL] <IP_1> [EMAIL]",
+			wantLen:    2,
+			wantLookup: map[string]string{"<IP_1>": "10.0.0.1"},
+		},
+		{
+			name:      "multiple custom categories",
+			detectors: []Detector{email("a@x.io"), ip("10.0.0.1")},
+			modes: map[Category]modeConfig{
+				CategoryEmail: {mode: modeCustom, text: "[EMAIL]"},
+				CategoryIP:    {mode: modeCustom, text: "[IP]"},
+			},
+			text:       "a@x.io 10.0.0.1",
+			want:       "[EMAIL] [IP]",
+			wantLen:    2,
+			wantLookup: map[string]string{"[EMAIL]": "a@x.io", "[IP]": "10.0.0.1"},
+		},
+		{
+			name:      "custom mode without text falls back to placeholder",
+			detectors: []Detector{email("a@x.io")},
+			modes: map[Category]modeConfig{
+				CategoryEmail: {mode: modeCustom},
+			},
+			text:       "a@x.io",
+			want:       "<EMAIL_1>",
+			wantLen:    1,
+			wantLookup: map[string]string{"<EMAIL_1>": "a@x.io"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, mapping := NewRedactor(tc.detectors, tc.modes).Redact(tc.text)
+			defer PutMapping(mapping)
+
+			if got != tc.want {
+				t.Fatalf("Redact = %q, want %q", got, tc.want)
+			}
+			if n := len(mapping.All()); n != tc.wantLen {
+				t.Fatalf("mapping length = %d, want %d", n, tc.wantLen)
+			}
+			for replacement, original := range tc.wantLookup {
+				value, ok := mapping.Lookup(replacement)
+				if !ok || value != original {
+					t.Fatalf("Lookup(%q) = (%q, %v), want (%q, true)", replacement, value, ok, original)
+				}
+			}
+		})
+	}
+}
+
+// TestRedactModesRoundTrip covers unredaction for both modes: placeholder mode
+// restores every distinct value, and custom mode restores values that all
+// collapse onto the configured text.
+func TestRedactModesRoundTrip(t *testing.T) {
+	unredactor := NewUnredactor()
+
+	t.Run("placeholder round trip", func(t *testing.T) {
+		original := "mail a@x.io or b@y.io from 10.0.0.1"
+		redactor := NewRedactor([]Detector{
+			literalDetector{cat: CategoryEmail, values: []string{"a@x.io", "b@y.io"}},
+			literalDetector{cat: CategoryIP, values: []string{"10.0.0.1"}},
+		}, nil)
+
+		redacted, mapping := redactor.Redact(original)
+		defer PutMapping(mapping)
+
+		if restored := unredactor.Unredact(redacted, mapping); restored != original {
+			t.Fatalf("round trip = %q, want %q", restored, original)
+		}
+	})
+
+	t.Run("custom round trip", func(t *testing.T) {
+		original := "mail a@x.io from 10.0.0.1"
+		redactor := NewRedactor([]Detector{
+			literalDetector{cat: CategoryEmail, values: []string{"a@x.io"}},
+			literalDetector{cat: CategoryIP, values: []string{"10.0.0.1"}},
+		}, map[Category]modeConfig{
+			CategoryEmail: {mode: modeCustom, text: "[EMAIL]"},
+		})
+
+		redacted, mapping := redactor.Redact(original)
+		defer PutMapping(mapping)
+
+		if want := "mail [EMAIL] from <IP_1>"; redacted != want {
+			t.Fatalf("Redact = %q, want %q", redacted, want)
+		}
+		if restored := unredactor.Unredact(redacted, mapping); restored != original {
+			t.Fatalf("round trip = %q, want %q", restored, original)
+		}
+	})
+
+	t.Run("custom repeated value round trip", func(t *testing.T) {
+		original := "a@x.io and a@x.io"
+		redactor := NewRedactor([]Detector{
+			literalDetector{cat: CategoryEmail, values: []string{"a@x.io"}},
+		}, map[Category]modeConfig{
+			CategoryEmail: {mode: modeCustom, text: "[EMAIL]"},
+		})
+
+		redacted, mapping := redactor.Redact(original)
+		defer PutMapping(mapping)
+
+		if want := "[EMAIL] and [EMAIL]"; redacted != want {
+			t.Fatalf("Redact = %q, want %q", redacted, want)
+		}
+		if restored := unredactor.Unredact(redacted, mapping); restored != original {
+			t.Fatalf("round trip = %q, want %q", restored, original)
+		}
+	})
+}
+
+// TestRedactRegistryCustomMode checks that NewRegistry carries a category's
+// configured mode through to the Redactor while other categories keep the
+// default placeholder mode.
+func TestRedactRegistryCustomMode(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.PII.Email.Mode = config.ModeCustom
+	cfg.PII.Email.Text = "[EMAIL]"
+	cfg.PII.IP.Mode = config.ModePlaceholder
+
+	reg, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	text := "mail a@x.io or b@y.io from 10.0.0.1"
+	redacted, mapping := reg.Redactor().Redact(text)
+	defer PutMapping(mapping)
+
+	want := "mail [EMAIL] or [EMAIL] from <IP_1>"
+	if redacted != want {
+		t.Fatalf("Redact = %q, want %q", redacted, want)
+	}
+	if n := len(mapping.All()); n != 2 {
+		t.Fatalf("mapping length = %d, want 2", n)
+	}
+	if got, ok := mapping.Lookup("<IP_1>"); !ok || got != "10.0.0.1" {
+		t.Fatalf("Lookup(<IP_1>) = (%q, %v), want (10.0.0.1, true)", got, ok)
 	}
 }
 
@@ -413,7 +626,7 @@ const genericSecretCategory = Category("GENERIC")
 func TestRedactOverlap_EmailVsDomain(t *testing.T) {
 	email := detectors.NewEmail()
 	domain := detectors.NewDomain()
-	r := NewRedactor([]Detector{email, domain}) // registry order
+	r := NewRedactor([]Detector{email, domain}, nil) // registry order
 
 	t.Run("address_domain_not_claimed_separately", func(t *testing.T) {
 		text := "contact user@acme.com today"
@@ -467,7 +680,7 @@ func TestRedactOverlap_EmailVsDomain(t *testing.T) {
 func TestRedactOverlap_PathVsDomain(t *testing.T) {
 	path := detectors.NewPath()
 	domain := detectors.NewDomain()
-	r := NewRedactor([]Detector{path, domain}) // registry order
+	r := NewRedactor([]Detector{path, domain}, nil) // registry order
 
 	t.Run("code_file_name_is_not_a_domain", func(t *testing.T) {
 		text := "edit /home/alice/main.go now"
@@ -545,7 +758,7 @@ func TestRedactOverlap_APIKeyVsGeneric(t *testing.T) {
 				Category: genericSecretCategory,
 			}},
 		}
-		r := NewRedactor([]Detector{apiKey, generic})
+		r := NewRedactor([]Detector{apiKey, generic}, nil)
 
 		redacted, mapping := r.Redact(text)
 		if want := "key <APIKEY_1> end"; redacted != want {
@@ -572,7 +785,7 @@ func TestRedactOverlap_APIKeyVsGeneric(t *testing.T) {
 		}
 
 		// API key first in the detector list: it wins the exact tie.
-		redacted, mapping := NewRedactor([]Detector{apiKey, generic}).Redact(text)
+		redacted, mapping := NewRedactor([]Detector{apiKey, generic}, nil).Redact(text)
 		if want := "key <APIKEY_1> end"; redacted != want {
 			t.Fatalf("Redact = %q, want %q", redacted, want)
 		}
@@ -582,7 +795,7 @@ func TestRedactOverlap_APIKeyVsGeneric(t *testing.T) {
 
 		// Reversed order: the generic detector now wins, which shows the
 		// tie-break is purely positional and not category-specific.
-		redacted, mapping = NewRedactor([]Detector{generic, apiKey}).Redact(text)
+		redacted, mapping = NewRedactor([]Detector{generic, apiKey}, nil).Redact(text)
 		if want := "key <GENERIC_1> end"; redacted != want {
 			t.Fatalf("Redact (reversed) = %q, want %q", redacted, want)
 		}

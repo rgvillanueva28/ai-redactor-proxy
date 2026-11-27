@@ -9,7 +9,7 @@ import (
 // roundTripRedactor returns a Redactor with a single detector that matches the
 // given literal values wherever they appear in the input.
 func roundTripRedactor(cat Category, values ...string) *Redactor {
-	return NewRedactor([]Detector{literalDetector{cat: cat, values: values}})
+	return NewRedactor([]Detector{literalDetector{cat: cat, values: values}}, nil)
 }
 
 // literalDetector finds each value in the text, left to right.
@@ -42,7 +42,7 @@ func TestRoundTripRedactUnredact(t *testing.T) {
 	redactor := NewRedactor([]Detector{
 		literalDetector{cat: CategoryEmail, values: []string{"alice@example.com", "bob@example.com"}},
 		literalDetector{cat: CategoryIP, values: []string{"10.0.0.1"}},
-	})
+	}, nil)
 	unredactor := NewUnredactor()
 
 	redacted, mapping := redactor.Redact(original)

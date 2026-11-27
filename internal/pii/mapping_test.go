@@ -63,6 +63,41 @@ func TestMappingDeduplicatesSameCategoryAndValue(t *testing.T) {
 	}
 }
 
+func TestMappingAddReplacement(t *testing.T) {
+	m := NewMapping()
+
+	first := m.AddReplacement(CategoryEmail, "[EMAIL]", "alice@example.com")
+	if first != "[EMAIL]" {
+		t.Fatalf("first replacement = %q, want [EMAIL]", first)
+	}
+	if got, ok := m.Lookup("[EMAIL]"); !ok || got != "alice@example.com" {
+		t.Fatalf("Lookup([EMAIL]) = (%q, %v), want (alice@example.com, true)", got, ok)
+	}
+
+	// A duplicate (category, original) pair returns the same replacement
+	// without touching the mapping.
+	if got := m.AddReplacement(CategoryEmail, "[EMAIL]", "alice@example.com"); got != first {
+		t.Fatalf("duplicate replacement = %q, want %q", got, first)
+	}
+	if n := len(m.All()); n != 1 {
+		t.Fatalf("mapping length = %d, want 1", n)
+	}
+
+	// Custom replacements never consume placeholder counters.
+	if got := m.Add(CategoryEmail, "bob@example.com"); got != "<EMAIL_1>" {
+		t.Fatalf("placeholder after custom add = %q, want <EMAIL_1>", got)
+	}
+
+	// A different category using the same replacement text reuses the entry,
+	// keeping the most recently registered original.
+	if got := m.AddReplacement(CategoryIP, "[EMAIL]", "10.0.0.1"); got != "[EMAIL]" {
+		t.Fatalf("cross-category replacement = %q, want [EMAIL]", got)
+	}
+	if got, ok := m.Lookup("[EMAIL]"); !ok || got != "10.0.0.1" {
+		t.Fatalf("Lookup([EMAIL]) after category reuse = (%q, %v), want (10.0.0.1, true)", got, ok)
+	}
+}
+
 func TestMappingLookupRoundTrip(t *testing.T) {
 	m := NewMapping()
 

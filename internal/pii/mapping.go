@@ -59,11 +59,8 @@ func (m *Mapping) Reset() {
 	}
 }
 
-// Add registers original under a placeholder for cat and returns the
-// placeholder, e.g. "<EMAIL_1>". If the same (cat, original) pair was already
-// added, its existing placeholder is returned and no counter is incremented.
-// Counters are per-category and start at 1 for a freshly reset Mapping.
-func (m *Mapping) Add(cat Category, original string) string {
+// ensure lazily allocates the backing maps so a zero-value Mapping is usable.
+func (m *Mapping) ensure() {
 	if m.entries == nil {
 		m.entries = make(map[string]string, 16)
 	}
@@ -73,6 +70,14 @@ func (m *Mapping) Add(cat Category, original string) string {
 	if m.assigned == nil {
 		m.assigned = make(map[string]string, 16)
 	}
+}
+
+// Add registers original under a placeholder for cat and returns the
+// placeholder, e.g. "<EMAIL_1>". If the same (cat, original) pair was already
+// added, its existing placeholder is returned and no counter is incremented.
+// Counters are per-category and start at 1 for a freshly reset Mapping.
+func (m *Mapping) Add(cat Category, original string) string {
+	m.ensure()
 	key := dedupKey(cat, original)
 	if placeholder, ok := m.assigned[key]; ok {
 		return placeholder
@@ -82,6 +87,30 @@ func (m *Mapping) Add(cat Category, original string) string {
 	m.entries[placeholder] = original
 	m.assigned[key] = placeholder
 	return placeholder
+}
+
+// AddReplacement registers original under an exact replacement string and
+// returns replacement. It backs the custom replacement mode, where the caller
+// supplies the text that stands in for a detected value instead of the
+// generated <CATEGORY_n> placeholder.
+//
+// Deduplication mirrors Add: adding the same (cat, original) pair again returns
+// the replacement assigned earlier and leaves the mapping untouched. Custom
+// mode has no counters, so it never advances the placeholder numbering.
+//
+// Every value configured with the same replacement text collapses onto one
+// mapping entry, so the mapping retains the most recently registered original
+// for that text. That ambiguity is inherent to replacing a whole category with
+// a single fixed string.
+func (m *Mapping) AddReplacement(cat Category, replacement, original string) string {
+	m.ensure()
+	key := dedupKey(cat, original)
+	if existing, ok := m.assigned[key]; ok {
+		return existing
+	}
+	m.entries[replacement] = original
+	m.assigned[key] = replacement
+	return replacement
 }
 
 // Lookup returns the original value registered for placeholder.
