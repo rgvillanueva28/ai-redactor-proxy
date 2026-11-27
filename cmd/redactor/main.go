@@ -107,14 +107,16 @@ func findLocalConfig() string {
 }
 
 // newMux builds the proxy's HTTP mux: /healthz answers liveness checks, the
-// configuration API is mounted under /api/config when api is non-nil, the log
-// viewer and its event stream are mounted under /logs when cfg.UI.Enable is set,
-// and every other path is handled by proxyHandler. It is factored out so tests
-// can exercise the exact routing the binary installs.
+// configuration API is mounted under /api/config when api is non-nil, the SPA
+// (log viewer and configuration editor) plus the log event stream are mounted
+// under /logs and /config when cfg.UI.Enable is set, and every other path is
+// handled by proxyHandler. It is factored out so tests can exercise the exact
+// routing the binary installs.
 //
-// The /logs and /api endpoints are registered before the "/" catch-all because
-// the mux resolves the most specific pattern first; within /logs, the exact
-// "/logs/events" pattern wins over the "/logs/" subtree.
+// The /api and UI endpoints are registered before the "/" catch-all because the
+// mux resolves the most specific pattern first. Within /logs the exact
+// "/logs/events" pattern wins over the "/logs/" subtree, so the SSE stream is
+// never shadowed by the SPA fallback.
 func newMux(proxyHandler http.Handler, cfg *config.Config, api *rules.Handler) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", health.Handler())
@@ -125,8 +127,10 @@ func newMux(proxyHandler http.Handler, cfg *config.Config, api *rules.Handler) *
 	}
 	if cfg != nil && cfg.UI.Enable {
 		mux.Handle("/logs/events", logging.SSEHandler())
-		mux.Handle("/logs/", ui.Handler())
-		mux.Handle("/logs", ui.Handler())
+		mux.Handle("/logs/", ui.Handler(ui.LogsMountPath))
+		mux.Handle("/logs", ui.Handler(ui.LogsMountPath))
+		mux.Handle("/config/", ui.Handler(ui.ConfigMountPath))
+		mux.Handle("/config", ui.Handler(ui.ConfigMountPath))
 	}
 	mux.Handle("/", proxyHandler)
 	return mux

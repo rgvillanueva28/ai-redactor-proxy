@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -520,10 +521,45 @@ func markerProxy() http.Handler {
 	})
 }
 
-func TestNewMuxServesUIWhenEnabled(t *testing.T) {
+// assetRef matches the relative asset URLs Vite writes into index.html.
+var assetRef = regexp.MustCompile(`(?:src|href)="\./(assets/[^"]+)"`)
+
+// TestNewMuxRedirectsBareMountPaths proves /logs and /config redirect to their
+// trailing-slash form, which the relative asset URLs in the bundle need.
+func TestNewMuxRedirectsBareMountPaths(t *testing.T) {
 	mux := newMux(markerProxy(), config.DefaultConfig(), nil)
 
-	for _, path := range []string{"/logs", "/logs/"} {
+	for _, prefix := range []string{"/logs", "/config"} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, prefix, nil))
+
+		if rec.Code != http.StatusMovedPermanently {
+			t.Errorf("GET %s status = %d, want %d", prefix, rec.Code, http.StatusMovedPermanently)
+		}
+		if loc := rec.Header().Get("Location"); loc != prefix+"/" {
+			t.Errorf("GET %s Location = %q, want %q", prefix, loc, prefix+"/")
+		}
+		if got := rec.Header().Get("X-Handled-By"); got != "" {
+			t.Errorf("GET %s reached the proxy handler (%s), want the UI handler", prefix, got)
+		}
+	}
+}
+
+// TestNewMuxServesSPAWhenEnabled proves both mount prefixes serve the SPA shell
+// for the mount root and for every client-side route, and that the shell points
+// its relative asset URLs at the requested prefix.
+func TestNewMuxServesSPAWhenEnabled(t *testing.T) {
+	mux := newMux(markerProxy(), config.DefaultConfig(), nil)
+
+	paths := map[string]string{
+		"/logs/":                  "/logs/",
+		"/logs/some-route":        "/logs/",
+		"/logs/deep/nested/route": "/logs/",
+		"/config/":                "/config/",
+		"/config/editor":          "/config/",
+		"/config/providers/new":   "/config/",
+	}
+	for path, wantBase := range paths {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 
@@ -533,34 +569,75 @@ func TestNewMuxServesUIWhenEnabled(t *testing.T) {
 		if ct := rec.Header().Get("Content-Type"); ct != "text/html; charset=utf-8" {
 			t.Errorf("GET %s Content-Type = %q, want text/html; charset=utf-8", path, ct)
 		}
-		if !strings.Contains(rec.Body.String(), "<title>Redactor") {
-			t.Errorf("GET %s did not serve the viewer page", path)
+		body := rec.Body.String()
+		if !strings.Contains(body, "<title>Redactor") {
+			t.Errorf("GET %s did not serve the SPA shell", path)
+		}
+		if !strings.Contains(body, `id="app"`) {
+			t.Errorf("GET %s shell has no mount point", path)
+		}
+		if want := `<base href="` + wantBase + `"`; !strings.Contains(body, want) {
+			t.Errorf("GET %s shell missing %s", path, want)
 		}
 		if got := rec.Header().Get("X-Handled-By"); got != "" {
 			t.Errorf("GET %s reached the proxy handler (%s), want the UI handler", path, got)
 		}
 	}
+}
 
-	assets := map[string]string{
-		"/logs/app.js":    "text/javascript; charset=utf-8",
-		"/logs/style.css": "text/css; charset=utf-8",
-	}
-	for path, wantCT := range assets {
+// TestNewMuxServesSPAAssets reads the asset URLs out of the served shell and
+// fetches each one under both mount prefixes, proving the single embedded
+// bundle backs both routes.
+func TestNewMuxServesSPAAssets(t *testing.T) {
+	mux := newMux(markerProxy(), config.DefaultConfig(), nil)
+
+	for _, prefix := range []string{"/logs", "/config"} {
 		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
-
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, prefix+"/", nil))
 		if rec.Code != http.StatusOK {
-			t.Errorf("GET %s status = %d, want 200", path, rec.Code)
+			t.Fatalf("GET %s/ status = %d, want 200", prefix, rec.Code)
 		}
-		if ct := rec.Header().Get("Content-Type"); ct != wantCT {
-			t.Errorf("GET %s Content-Type = %q, want %q", path, ct, wantCT)
+
+		refs := assetRef.FindAllStringSubmatch(rec.Body.String(), -1)
+		if len(refs) < 2 {
+			t.Fatalf("GET %s/ shell references %d assets (%v), want at least a script and a stylesheet", prefix, len(refs), refs)
 		}
-		if rec.Body.Len() == 0 {
-			t.Errorf("GET %s served an empty body", path)
+
+		for _, match := range refs {
+			asset := match[1]
+			wantCT := contentTypeForTest(t, asset)
+
+			assetRec := httptest.NewRecorder()
+			mux.ServeHTTP(assetRec, httptest.NewRequest(http.MethodGet, prefix+"/"+asset, nil))
+
+			if assetRec.Code != http.StatusOK {
+				t.Errorf("GET %s/%s status = %d, want 200", prefix, asset, assetRec.Code)
+			}
+			if ct := assetRec.Header().Get("Content-Type"); ct != wantCT {
+				t.Errorf("GET %s/%s Content-Type = %q, want %q", prefix, asset, ct, wantCT)
+			}
+			if assetRec.Body.Len() == 0 {
+				t.Errorf("GET %s/%s served an empty body", prefix, asset)
+			}
+			if got := assetRec.Header().Get("X-Handled-By"); got != "" {
+				t.Errorf("GET %s/%s reached the proxy handler (%s), want the UI handler", prefix, asset, got)
+			}
 		}
-		if got := rec.Header().Get("X-Handled-By"); got != "" {
-			t.Errorf("GET %s reached the proxy handler (%s), want the UI handler", path, got)
-		}
+	}
+}
+
+// contentTypeForTest returns the MIME type the UI handler must report for an
+// asset referenced by the build.
+func contentTypeForTest(t *testing.T, name string) string {
+	t.Helper()
+	switch {
+	case strings.HasSuffix(name, ".js"):
+		return "text/javascript; charset=utf-8"
+	case strings.HasSuffix(name, ".css"):
+		return "text/css; charset=utf-8"
+	default:
+		t.Fatalf("unexpected asset in bundle: %s", name)
+		return ""
 	}
 }
 
@@ -592,7 +669,10 @@ func TestNewMuxLogsHiddenWhenUIDisabled(t *testing.T) {
 	cfg.UI.Enable = false
 	mux := newMux(markerProxy(), cfg, nil)
 
-	paths := []string{"/logs", "/logs/", "/logs/events", "/logs/app.js", "/logs/style.css"}
+	paths := []string{
+		"/logs", "/logs/", "/logs/events", "/logs/assets/index.js",
+		"/config", "/config/", "/config/editor",
+	}
 	for _, path := range paths {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
