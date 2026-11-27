@@ -1,6 +1,6 @@
 # PII Redacting Proxy for AI CLIs
 
-A high-performance HTTP proxy that sanitizes PII from AI CLI requests before forwarding to upstream providers (OpenAI, Anthropic, Gemini). The proxy redacts sensitive data using placeholder tags, forwards the sanitized request, then unredacts the response before returning to the client.
+A high-performance HTTP proxy that sanitizes PII from AI CLI requests before forwarding to upstream providers (OpenAI, Anthropic, Gemini). The proxy redacts sensitive data using configurable replacement text (numbered placeholders like `<EMAIL_1>` or custom strings like `[EMAIL]`), forwards the sanitized request, then unredacts the response before returning to the client.
 
 ## Quick Start
 
@@ -72,14 +72,16 @@ host_match = "api.openai.com"
 base_url = "https://api.openai.com"
 
 [ui]
-enable = true  # Serve the real-time log viewer at /logs (default: true)
+enable = true  # Serve the web GUI: log viewer at /logs, config editor at /config (default: true)
 ```
 
 ### PII categories
 
 Every detector has a flat on/off toggle and its own placeholder prefix. All are
 enabled by default except `person_name`, whose heuristic is noisy enough to be
-opt-in.
+opt-in. The placeholder column shows the default output; any category can
+instead use a fixed custom replacement (see
+[Replacement modes](#replacement-modes)).
 
 | Category    | Toggle               | Placeholder  | Detects |
 |-------------|----------------------|--------------|---------|
@@ -124,6 +126,10 @@ denylist = ["public@example.com"]     # values that must never be redacted
   matches and to `names`/`patterns` hits alike.
 - Everything a category reports keeps that category's placeholder prefix, so a
   custom `[pii.phone]` pattern still produces `<PHONE_n>`.
+- `mode` chooses how matches are replaced: `"placeholder"` (default, numbered tags)
+  or `"custom"` (a fixed string you choose). See [Replacement modes](#replacement-modes).
+- `text` is the replacement string when `mode = "custom"`. Required for custom mode,
+  ignored for placeholder mode.
 
 The block name is the lowercase form of the category: `email`, `phone`,
 `credit_card`, `ssn`, `ip`, `path`, `api_key`, `credential`, `domain`,
@@ -159,6 +165,73 @@ TOML note: in basic (double-quoted) strings a backslash must be doubled, hence
 `"\\bINTERNAL-\\d{4}\\b"`. Literal (single-quoted) strings keep backslashes
 as written: `patterns = ['\bINTERNAL-\d{4}\b']`.
 
+### Replacement modes
+
+Every category chooses how its matches are replaced with the `mode` key of the
+same `[pii.<category>]` block:
+
+```toml
+[pii.email]
+enabled = true
+mode = "custom"
+text = "[EMAIL]"
+```
+
+| Mode | Replacement | Example output |
+|------|-------------|----------------|
+| `placeholder` | Numbered tag per distinct value (default) | `<EMAIL_1>`, `<EMAIL_2>` |
+| `custom` | One fixed string for every match | `[EMAIL]` |
+
+- `placeholder` is the default and needs no configuration. Each new value in a
+  category takes the next number, and a value repeated within one request reuses
+  the tag it was already given.
+- `custom` replaces every match in that category with exactly the configured
+  `text`.
+- `text` is required when `mode = "custom"`. An empty `text` is a configuration
+  error, and `text` is ignored in `placeholder` mode.
+- An unknown `mode` is rejected too. Both errors are reported while the proxy
+  starts, even for a category whose detector is disabled, so a typo cannot pass
+  silently.
+
+Modes are set per category and mix freely, so you can use readable markers only
+where you want them:
+
+```toml
+# Readable markers for the values that matter most.
+[pii.email]
+mode = "custom"
+text = "[EMAIL]"
+
+# Keep numbered tags elsewhere (this is the default, shown for clarity).
+[pii.phone]
+mode = "placeholder"
+
+# Custom text does not have to look like a placeholder.
+[pii.credential]
+mode = "custom"
+text = "<secret>"
+
+# Also works together with names, patterns, and denylist.
+[pii.domain]
+mode = "custom"
+text = "[DOMAIN]"
+denylist = ["example.com"]
+```
+
+The mode applies to everything the category reports, including hits from
+`names` and `patterns`, and composes with `enabled` in either direction. It does
+not change detection, only the replacement string.
+
+Both modes record a per-request mapping, so the unredactor restores the original
+value when the upstream response echoes the replacement back. There is one
+inherent difference: in `custom` mode every value of a category shares a single
+replacement string and therefore a single mapping entry, so a request containing
+two different emails ends up with one mapping entry and only the most recently
+seen email can be restored. Use `placeholder` mode when distinct values of the
+same category must round-trip exactly; `custom` mode is best for a category
+where a readable marker matters more than exact restoration, or where the
+category rarely has more than one value per request.
+
 ## Usage with AI CLIs
 
 ### Claude Code
@@ -184,30 +257,88 @@ gemini-cli --base-url=http://127.0.0.1:28443
 curl http://127.0.0.1:28443/healthz
 ```
 
-## Live Log Viewer
+## Web GUI
 
-The proxy serves a real-time log viewer on the same port as the proxy itself.
-Open `http://127.0.0.1:28443/logs` in a browser to watch the proxy's structured
-JSON logs as they are emitted.
+The proxy serves a web-based GUI on the same port as the proxy itself. The GUI
+is enabled by default and provides two views:
 
-- Log records are streamed over Server-Sent Events from `/logs/events`.
-- The viewer filters entries client-side by level (debug, info, warn, error) and
-  by free-text search.
-- Assets are embedded in the binary, so the UI adds no runtime files.
-- The stream is read-only and shows the same records the proxy writes to stderr.
+- **Log viewer** (`/logs`): Watch the proxy's structured JSON logs in real-time
+  as they are emitted. Log records are streamed over Server-Sent Events from
+  `/logs/events`. The viewer filters entries by level (debug, info, warn, error)
+  and by free-text search, with auto-scroll and a detail modal for full entries.
 
-The viewer is enabled by default. To turn it off, add the following to your
-config file:
+- **Config editor** (`/config`): Customize redaction rules without editing
+  `config.toml` by hand. Edit category settings (names, patterns, denylist),
+  choose replacement modes, and preview redactions on sample text. Changes are
+  saved to disk and applied immediately — no restart required.
+
+Open `http://127.0.0.1:28443/logs` or `http://127.0.0.1:28443/config` in a
+browser.
+
+The GUI is a single-page application built with Svelte and embedded in the
+binary, so it adds no runtime files.
+
+To turn the GUI off, add the following to your config file:
 
 ```toml
 [ui]
 enable = false
 ```
 
-When disabled, the `/logs` paths are not registered at all, so requests to them
-are handled by the proxy's normal routing exactly like any other path. The
-proxy's `--log-level` flag still controls which records are emitted, so use
-`--log-level debug` for the most detail.
+When disabled, the `/logs` and `/config` paths are not registered at all, so
+requests to them are handled by the proxy's normal routing exactly like any
+other path. The proxy's `--log-level` flag still controls which records are
+emitted, so use `--log-level debug` for the most detail.
+
+### Hot reload
+
+All configuration changes made through the GUI (or via the Config API below)
+are applied immediately without restarting the proxy. This includes:
+
+- Enabling or disabling detectors
+- Adding or removing names, patterns, and denylist entries
+- Changing replacement modes and custom text
+- Toggling `log_redacted` and `log_bodies`
+
+Changes are persisted to `config.toml` on disk, so they survive restarts.
+
+## Config API
+
+The proxy exposes a JSON API for reading and writing redaction configuration
+programmatically. The API is available at the following endpoints:
+
+- **`GET /api/config`**: Returns the current configuration as JSON.
+- **`PUT /api/config`**: Accepts an updated configuration as JSON, validates it,
+  saves it to `config.toml`, and reloads the proxy. Returns the saved
+  configuration on success, or a `400` error with field-specific validation
+  messages on failure.
+- **`POST /api/config/reload`**: Re-reads the configuration from `config.toml`
+  on disk and reloads the proxy. Useful if the file is edited externally.
+- **`POST /api/config/preview`**: Accepts a JSON body with `text` and optional
+  `config` fields. Returns the redacted text and a list of matches (category,
+  start, end, replacement) without modifying the live configuration. If `config`
+  is omitted, the live configuration is used.
+
+All endpoints require no authentication and are bound to the proxy's listener
+(typically `127.0.0.1`). All responses include `Cache-Control: no-store` and
+`X-Content-Type-Options: nosniff` headers.
+
+Example:
+
+```bash
+# Get current config
+curl http://127.0.0.1:28443/api/config
+
+# Update config
+curl -X PUT http://127.0.0.1:28443/api/config \
+  -H "Content-Type: application/json" \
+  -d '{"pii": {"email": {"enabled": true, "mode": "custom", "text": "[EMAIL]"}}}'
+
+# Preview redaction
+curl -X POST http://127.0.0.1:28443/api/config/preview \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Contact me at user@example.com"}'
+```
 
 ## Systemd Service (Linux)
 
@@ -239,7 +370,7 @@ sudo systemctl start redactor
 
 1. **Request interception**: The proxy receives requests from AI CLIs
 2. **PII detection**: Scans JSON bodies for emails, phone numbers, credit cards, SSNs, IPs, file paths, API keys, credentials, domains, and custom client names
-3. **Redaction**: Replaces detected PII with placeholders (e.g., `<EMAIL_1>`, `<PHONE_2>`)
+3. **Redaction**: Replaces detected PII with placeholders (e.g., `<EMAIL_1>`, `<PHONE_2>`) or, per category, a configured custom text (e.g., `[EMAIL]`)
 4. **Forwarding**: Sends sanitized request to the real upstream API
 5. **Unredaction**: Restores original PII in the response before returning to the client
 
