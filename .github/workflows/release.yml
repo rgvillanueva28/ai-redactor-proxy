@@ -56,11 +56,14 @@ jobs:
           GOARCH: amd64
         run: go build -ldflags="-s -w" -o redactor-windows-amd64.exe ./cmd/redactor
 
+      - name: Prepare sample config
+        run: cp config.toml.example config.toml
+
       - name: Create Linux archive
-        run: tar -czf redactor-linux-amd64.tar.gz redactor-linux-amd64 config.toml.example README.md
+        run: tar -czf redactor-linux-amd64.tar.gz redactor-linux-amd64 config.toml README.md
 
       - name: Create Windows archive
-        run: 7z a redactor-windows-amd64.zip redactor-windows-amd64.exe config.toml.example README.md
+        run: 7z a redactor-windows-amd64.zip redactor-windows-amd64.exe config.toml README.md
 
       - name: Generate checksums
         run: sha256sum *.tar.gz *.zip > checksums.txt
