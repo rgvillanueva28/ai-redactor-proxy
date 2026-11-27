@@ -1,0 +1,118 @@
+# Redactor sample configuration.
+#
+# Copy this file to `config.toml` next to the binary (or point the --config flag
+# at it) and edit the values you need. Every key shown here has the same value
+# as the built-in default, so deleting a line keeps the behavior it documents.
+#
+# Start with: ./redactor --config config.toml
+#
+# TOML note: inside double-quoted strings a backslash must be doubled, so a
+# regular expression looks like "\\bINTERNAL-\\d{4}\\b". Single-quoted strings
+# keep backslashes as written: '\bINTERNAL-\d{4}\b'.
+
+# ---------------------------------------------------------------------------
+# Listener
+# ---------------------------------------------------------------------------
+[listen]
+# Address the proxy listens on. Defaults to loopback only; change to
+# "0.0.0.0:8443" to accept connections from other machines.
+address = "127.0.0.1:8443"
+
+# ---------------------------------------------------------------------------
+# PII detectors
+# ---------------------------------------------------------------------------
+# Every detector has a flat on/off toggle. All are enabled by default except
+# person_name, whose heuristic is noisy enough to be opt-in.
+[pii]
+enable_email = true
+enable_phone = true
+enable_creditcard = true
+enable_ssn = true
+enable_ip = true
+enable_path = true
+enable_apikey = true
+enable_credential = true
+enable_domain = true
+enable_person_name = false  # High false-positive rate, opt-in only
+enable_client_name = true
+
+# Log each redacted item (placeholder, category, original value) at info level.
+# Values themselves are logged, so leave this off in production.
+log_redacted = false
+
+# Log full request/response bodies at info level when enabled (very verbose,
+# and includes the original PII, so use only while debugging).
+log_bodies = false
+
+# Literal client names that must always be redacted, matched case-insensitively
+# and replaced with <CLIENT_n>. Prefer the newer [pii.client] block below; this
+# older block is still merged into [pii.client].names at load time.
+[pii.client_names]
+names = ["Acme Corp", "Project Phoenix", "Internal API"]
+
+# ---------------------------------------------------------------------------
+# Per-category customization (optional)
+# ---------------------------------------------------------------------------
+# Every category also accepts a [pii.<category>] block that can override the
+# flat toggle and extend or restrict what the detector reports:
+#
+#   enabled  - overrides the matching flat toggle in both directions
+#   names    - extra literal, case-insensitive values
+#   patterns - extra Go regular expressions (invalid ones are skipped)
+#   denylist - exact values that must never be redacted
+#   mode     - "placeholder" (default, <CATEGORY_n>) or "custom" (fixed text)
+#   text     - replacement used when mode = "custom"; required in that mode
+#
+# Category block names: email, phone, credit_card, ssn, ip, path, api_key,
+# domain, client, credential, person_name.
+#
+# The examples below are commented out because the built-in defaults already
+# cover the common case. Uncomment only what you need.
+#
+# # Turn one category off without touching any other toggle.
+# [pii.ssn]
+# enabled = false
+#
+# # Add internal hostnames and keep one public domain readable.
+# [pii.domain]
+# names = ["internal.corp", "build.corp"]
+# denylist = ["example.com"]
+#
+# # Recognise an application-specific credential format.
+# [pii.credential]
+# patterns = ["\\bAPI-SECRET-[A-Z0-9]+\\b"]
+#
+# # Add an address plus an internal label that is not address-shaped.
+# [pii.email]
+# names = ["noreply@company.com", "Corporate Mailbox"]
+#
+# # Replace every email with one readable marker instead of <EMAIL_n>.
+# [pii.email]
+# mode = "custom"
+# text = "[EMAIL]"
+
+# ---------------------------------------------------------------------------
+# Upstream providers
+# ---------------------------------------------------------------------------
+# Requests are routed by Host to the matching provider and forwarded to
+# base_url. Override a provider's URL or add your own entry if you use a
+# compatible gateway or a self-hosted endpoint.
+[upstream.openai]
+host_match = "api.openai.com"
+base_url = "https://api.openai.com"
+
+[upstream.anthropic]
+host_match = "api.anthropic.com"
+base_url = "https://api.anthropic.com"
+
+[upstream.gemini]
+host_match = "generativelanguage.googleapis.com"
+base_url = "https://generativelanguage.googleapis.com"
+
+# ---------------------------------------------------------------------------
+# Web UI
+# ---------------------------------------------------------------------------
+[ui]
+# Serve the real-time log viewer at /logs (default: true). When disabled the
+# /logs paths are not registered at all and are proxied like any other path.
+enable = true
