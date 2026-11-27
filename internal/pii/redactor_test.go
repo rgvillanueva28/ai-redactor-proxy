@@ -378,15 +378,15 @@ func TestRedactEveryCategory(t *testing.T) {
 	const key = "sk-proj-abc123def456ghi789jkl012mno345pqr678"
 	text := "mail foo@bar.com, call +14155552671, card 4111111111111111, " +
 		"ssn 123-45-6789, host 10.0.0.1, path /home/alice/x.go then key " + key +
-		", site acme.com, client Acme Corp, person John Smith"
+		" password=hunter2 and site acme.com, client Acme Corp, person John Smith"
 
 	reg := mixedPIIRegistry(t)
 	redacted, mapping := reg.Redactor().Redact(text)
 	defer PutMapping(mapping)
 
 	want := "mail <EMAIL_1>, call <PHONE_1>, card <CC_1>, ssn <SSN_1>, " +
-		"host <IP_1>, path <PATH_1> then key <APIKEY_1>, site <DOMAIN_1>, " +
-		"client <CLIENT_1>, person <NAME_1>"
+		"host <IP_1>, path <PATH_1> then key <APIKEY_1> password=<CRED_1> " +
+		"and site <DOMAIN_1>, client <CLIENT_1>, person <NAME_1>"
 	if redacted != want {
 		t.Fatalf("Redact = %q, want %q", redacted, want)
 	}
