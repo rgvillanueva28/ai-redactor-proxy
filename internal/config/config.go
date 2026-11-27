@@ -2,6 +2,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -59,6 +60,26 @@ type PIIConfig struct {
 	LogBodies   bool `toml:"log_bodies"`
 }
 
+// Replacement modes supported by ResolveMode.
+const (
+	// ModePlaceholder replaces each detected value with a numbered
+	// <CATEGORY_n> token such as <EMAIL_1>.
+	ModePlaceholder = "placeholder"
+	// ModeCustom replaces each detected value with a user-supplied string
+	// such as "[EMAIL]".
+	ModeCustom = "custom"
+)
+
+// Replacement-mode validation errors. Callers can match them with errors.Is.
+var (
+	// ErrInvalidMode is wrapped when a category config names an unknown
+	// replacement mode.
+	ErrInvalidMode = errors.New("invalid replacement mode")
+	// ErrMissingReplacementText is wrapped when custom mode is selected but
+	// no replacement text was supplied.
+	ErrMissingReplacementText = errors.New("missing replacement text")
+)
+
 // CategoryConfig customizes a single PII category. Enabled is a pointer so an
 // omitted key (nil) can be distinguished from an explicit false.
 type CategoryConfig struct {
@@ -66,6 +87,13 @@ type CategoryConfig struct {
 	Names    []string `toml:"names"`
 	Patterns []string `toml:"patterns"`
 	Denylist []string `toml:"denylist"`
+
+	// Mode selects how detected values are replaced: "placeholder" (the
+	// default) or "custom". An omitted/empty mode means "placeholder".
+	Mode string `toml:"mode"`
+	// Text is the replacement text used when Mode is "custom", for example
+	// "[EMAIL]". It is ignored by other modes.
+	Text string `toml:"text"`
 }
 
 // ClientNamesConfig holds literal client names that must always be redacted.
@@ -80,6 +108,25 @@ func ResolveEnabled(cat CategoryConfig, flatToggle bool) bool {
 		return *cat.Enabled
 	}
 	return flatToggle
+}
+
+// ResolveMode validates a category's replacement settings and returns the
+// effective mode together with the replacement text it should use.
+//
+// An omitted mode defaults to "placeholder" and yields no replacement text.
+// "custom" requires non-empty Text; anything else is rejected.
+func ResolveMode(cat CategoryConfig) (mode, text string, err error) {
+	switch cat.Mode {
+	case "", ModePlaceholder:
+		return ModePlaceholder, "", nil
+	case ModeCustom:
+		if cat.Text == "" {
+			return "", "", fmt.Errorf("config: custom mode requires replacement text: %w", ErrMissingReplacementText)
+		}
+		return ModeCustom, cat.Text, nil
+	default:
+		return "", "", fmt.Errorf("config: invalid mode %q: %w", cat.Mode, ErrInvalidMode)
+	}
 }
 
 // MergeLegacyClientNames folds the deprecated [pii.client_names] list into

@@ -1,6 +1,7 @@
 package pii
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/local/redactor/internal/config"
@@ -486,5 +487,27 @@ func TestNewRegistryNilConfig(t *testing.T) {
 	}
 	if r.Redactor() == nil || r.Unredactor() == nil {
 		t.Fatal("Redactor()/Unredactor() must not be nil")
+	}
+}
+
+// TestNewRegistryRejectsInvalidReplacementMode verifies that an unknown mode
+// fails registry construction instead of silently falling back.
+func TestNewRegistryRejectsInvalidReplacementMode(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.PII.Email.Mode = "mask"
+
+	if _, err := NewRegistry(cfg); !errors.Is(err, config.ErrInvalidMode) {
+		t.Fatalf("NewRegistry error = %v, want ErrInvalidMode", err)
+	}
+}
+
+// TestNewRegistryRejectsCustomModeWithoutText verifies that custom mode without
+// replacement text fails registry construction.
+func TestNewRegistryRejectsCustomModeWithoutText(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.PII.Email.Mode = config.ModeCustom
+
+	if _, err := NewRegistry(cfg); !errors.Is(err, config.ErrMissingReplacementText) {
+		t.Fatalf("NewRegistry error = %v, want ErrMissingReplacementText", err)
 	}
 }

@@ -5,15 +5,47 @@ import (
 	"strings"
 )
 
-// Redactor applies a fixed set of detectors to text and replaces every
-// accepted match with a tagged placeholder.
-type Redactor struct {
-	detectors []Detector
+// Replacement modes the Redactor understands. They mirror the config package's
+// ModePlaceholder and ModeCustom values; the registry resolves config modes
+// into these strings.
+const (
+	// modePlaceholder replaces each value with a numbered <CATEGORY_n> token.
+	modePlaceholder = "placeholder"
+	// modeCustom replaces each value with a fixed user-supplied string.
+	modeCustom = "custom"
+)
+
+// modeConfig is the per-category replacement configuration the Redactor
+// applies. A missing entry, or an empty mode, means placeholder mode.
+type modeConfig struct {
+	mode string // modePlaceholder or modeCustom
+	text string // replacement text used by modeCustom
 }
 
-// NewRedactor returns a Redactor that runs detectors in the given order.
-func NewRedactor(detectors []Detector) *Redactor {
-	return &Redactor{detectors: detectors}
+// Redactor applies a fixed set of detectors to text and replaces every
+// accepted match with either a tagged placeholder or a configured fixed text.
+type Redactor struct {
+	detectors []Detector
+	modes     map[Category]modeConfig
+}
+
+// NewRedactor returns a Redactor that runs detectors in the given order and
+// replaces matches according to modes. A nil or empty modes map makes every
+// category use placeholder mode.
+func NewRedactor(detectors []Detector, modes map[Category]modeConfig) *Redactor {
+	return &Redactor{detectors: detectors, modes: modes}
+}
+
+// replacement records original in mapping for cat and returns the text that
+// should stand in for it. Placeholder mode delegates counter and dedup handling
+// to Mapping.Add; custom mode registers the configured text instead. Custom
+// mode without replacement text falls back to placeholder mode so a malformed
+// configuration cannot silently delete values.
+func (r *Redactor) replacement(mapping *Mapping, cat Category, original string) string {
+	if cfg, ok := r.modes[cat]; ok && cfg.mode == modeCustom && cfg.text != "" {
+		return mapping.AddReplacement(cat, cfg.text, original)
+	}
+	return mapping.Add(cat, original)
 }
 
 // candidate is a Match plus the index of the detector that produced it, used
@@ -65,7 +97,7 @@ func (r *Redactor) Redact(text string) (string, *Mapping) {
 			continue
 		}
 		b.WriteString(text[cursor:c.match.Start])
-		b.WriteString(mapping.Add(c.match.Category, text[c.match.Start:c.match.End]))
+		b.WriteString(r.replacement(mapping, c.match.Category, text[c.match.Start:c.match.End]))
 		cursor = c.match.End
 	}
 	b.WriteString(text[cursor:])

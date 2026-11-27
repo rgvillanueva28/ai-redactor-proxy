@@ -39,6 +39,7 @@ type categorySpec struct {
 // A detector is only wrapped when its block actually adds something.
 func NewRegistry(cfg *config.Config) (*Registry, error) {
 	var ds []Detector
+	var modes map[Category]modeConfig
 	if cfg != nil {
 		p := cfg.PII
 		clientCfg := mergedClientConfig(p)
@@ -79,6 +80,20 @@ func NewRegistry(cfg *config.Config) (*Registry, error) {
 			}},
 		}
 
+		// Resolve every category's replacement mode up front so an invalid
+		// mode or a custom mode without text fails construction, even for a
+		// category whose detector ends up disabled.
+		modes = make(map[Category]modeConfig, len(specs))
+		for _, s := range specs {
+			mode, text, err := config.ResolveMode(s.cfg)
+			if err != nil {
+				return nil, err
+			}
+			if mode == config.ModeCustom {
+				modes[s.category] = modeConfig{mode: modeCustom, text: text}
+			}
+		}
+
 		for _, s := range specs {
 			if !config.ResolveEnabled(s.cfg, s.flat) {
 				continue
@@ -108,7 +123,7 @@ func NewRegistry(cfg *config.Config) (*Registry, error) {
 
 	return &Registry{
 		detectors:  ds,
-		redactor:   NewRedactor(ds),
+		redactor:   NewRedactor(ds, modes),
 		unredactor: NewUnredactor(),
 	}, nil
 }
