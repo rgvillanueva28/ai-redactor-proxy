@@ -83,6 +83,41 @@ func TestDomainDetectRegistrableDomain(t *testing.T) {
 			text: "a.acme.com then globex.co.uk",
 			want: []string{"acme.com", "globex.co.uk"},
 		},
+		{
+			name: "known_gtlds",
+			text: "example.com test.io my.ai cool.dev",
+			want: []string{"example.com", "test.io", "my.ai", "cool.dev"},
+		},
+		{
+			name: "bare_public_suffix_rejected",
+			text: "see co.uk now",
+			want: nil,
+		},
+		{
+			name: "code_package_not_a_domain",
+			text: "import androidx.work",
+			want: nil,
+		},
+		{
+			name: "python_module_not_a_domain",
+			text: "run json.py please",
+			want: nil,
+		},
+		{
+			name: "archive_name_not_a_domain",
+			text: "download 0.zip now",
+			want: nil,
+		},
+		{
+			name: "markdown_file_not_a_domain",
+			text: "open MEMORY.md first",
+			want: nil,
+		},
+		{
+			name: "app_bundle_not_a_domain",
+			text: "HomeControlService.app",
+			want: nil,
+		},
 	}
 
 	d := NewDomain()
