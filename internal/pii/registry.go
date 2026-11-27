@@ -1,18 +1,24 @@
 package pii
 
 import (
+	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/local/redactor/internal/config"
 	"github.com/local/redactor/internal/pii/detectors"
 )
 
 // Registry owns the configured detectors and the redaction helpers built from
-// them.
+// them. The detector set can be replaced at runtime with Reload; the redaction
+// helpers and the log toggles stay valid for the lifetime of the process.
 type Registry struct {
-	detectors  []Detector
-	redactor   *Redactor
-	unredactor *Unredactor
+	mu          sync.RWMutex
+	detectors   []Detector
+	redactor    *Redactor
+	unredactor  *Unredactor
+	logRedacted bool
+	logBodies   bool
 }
 
 // categorySpec describes one detector to wire: its category, the flat enable
@@ -38,6 +44,25 @@ type categorySpec struct {
 // add literal names and regex patterns, and suppress values with a denylist.
 // A detector is only wrapped when its block actually adds something.
 func NewRegistry(cfg *config.Config) (*Registry, error) {
+	ds, modes, err := buildDetectors(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Registry{
+		detectors:   ds,
+		redactor:    NewRedactor(ds, modes),
+		unredactor:  NewUnredactor(),
+		logRedacted: cfg != nil && cfg.PII.LogRedacted,
+		logBodies:   cfg != nil && cfg.PII.LogBodies,
+	}, nil
+}
+
+// buildDetectors builds the ordered detector list described by cfg, together
+// with the per-category replacement modes it selected. It is the single place
+// that maps configuration to detector construction, shared by NewRegistry and
+// Reload so the two cannot drift apart.
+func buildDetectors(cfg *config.Config) ([]Detector, map[Category]modeConfig, error) {
 	var ds []Detector
 	var modes map[Category]modeConfig
 	if cfg != nil {
@@ -87,7 +112,7 @@ func NewRegistry(cfg *config.Config) (*Registry, error) {
 		for _, s := range specs {
 			mode, text, err := config.ResolveMode(s.cfg)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if mode == config.ModeCustom {
 				modes[s.category] = modeConfig{mode: modeCustom, text: text}
@@ -107,25 +132,61 @@ func NewRegistry(cfg *config.Config) (*Registry, error) {
 
 			base, err := s.build()
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 
 			det := base
 			if needsCustomization(base, s.cfg) {
 				det, err = wrapDetector(base, s.cfg)
 				if err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 			}
 			ds = append(ds, det)
 		}
 	}
+	return ds, modes, nil
+}
 
-	return &Registry{
-		detectors:  ds,
-		redactor:   NewRedactor(ds, modes),
-		unredactor: NewUnredactor(),
-	}, nil
+// Reload rebuilds the detector set and replacement modes from cfg and swaps
+// them into the redactor. It also refreshes the log toggles returned by
+// LogRedacted and LogBodies, so a caller that owns the request handlers can
+// apply them without re-reading the file.
+//
+// Detectors are built completely before the swap, so a failure leaves the
+// registry exactly as it was. The swap itself is safe while Redact is running:
+// see Redactor.SetConfig.
+func (r *Registry) Reload(cfg *config.Config) error {
+	ds, modes, err := buildDetectors(cfg)
+	if err != nil {
+		return fmt.Errorf("pii: reload: %w", err)
+	}
+
+	r.redactor.SetConfig(ds, modes)
+
+	r.mu.Lock()
+	r.detectors = ds
+	r.logRedacted = cfg != nil && cfg.PII.LogRedacted
+	r.logBodies = cfg != nil && cfg.PII.LogBodies
+	r.mu.Unlock()
+
+	return nil
+}
+
+// LogRedacted reports whether redacted items should be logged, as of the last
+// successful Reload.
+func (r *Registry) LogRedacted() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.logRedacted
+}
+
+// LogBodies reports whether full request and response bodies should be logged,
+// as of the last successful Reload.
+func (r *Registry) LogBodies() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.logBodies
 }
 
 // mergedClientConfig folds the deprecated [pii.client_names] list into the

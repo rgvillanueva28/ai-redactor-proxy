@@ -4,6 +4,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/local/redactor/internal/config"
@@ -40,6 +41,62 @@ func TestRedactSingleMatch(t *testing.T) {
 	}
 	if n := len(mapping.All()); n != 1 {
 		t.Fatalf("mapping length = %d, want 1", n)
+	}
+}
+
+func TestRedactWithMatchesReportsSpans(t *testing.T) {
+	text := "contact alice@example.com or bob@example.net now"
+	alice := strings.Index(text, "alice@example.com")
+	bob := strings.Index(text, "bob@example.net")
+	d := mockDetector{
+		cat: CategoryEmail,
+		matches: []Match{
+			{Start: bob, End: bob + len("bob@example.net"), Category: CategoryEmail},
+			{Start: alice, End: alice + len("alice@example.com"), Category: CategoryEmail},
+		},
+	}
+
+	got, matches, mapping := NewRedactor([]Detector{d}, nil).RedactWithMatches(text)
+	defer PutMapping(mapping)
+
+	if want := "contact <EMAIL_1> or <EMAIL_2> now"; got != want {
+		t.Fatalf("redacted = %q, want %q", got, want)
+	}
+	if len(matches) != 2 {
+		t.Fatalf("matches = %d, want 2", len(matches))
+	}
+	// Matches are reported in output order, not detector order.
+	want := []RedactMatch{
+		{Category: CategoryEmail, Start: alice, End: alice + len("alice@example.com"), Replacement: "<EMAIL_1>"},
+		{Category: CategoryEmail, Start: bob, End: bob + len("bob@example.net"), Replacement: "<EMAIL_2>"},
+	}
+	for i, w := range want {
+		if matches[i] != w {
+			t.Errorf("match %d = %+v, want %+v", i, matches[i], w)
+		}
+	}
+
+	// Redact must produce the same text and mapping.
+	plain, plainMapping := NewRedactor([]Detector{d}, nil).Redact(text)
+	defer PutMapping(plainMapping)
+	if plain != got {
+		t.Errorf("Redact = %q, RedactWithMatches = %q", plain, got)
+	}
+	if len(plainMapping.All()) != len(mapping.All()) {
+		t.Errorf("mapping sizes differ: %d vs %d", len(plainMapping.All()), len(mapping.All()))
+	}
+}
+
+func TestRedactWithMatchesNoMatches(t *testing.T) {
+	text := "nothing to redact here"
+	got, matches, mapping := NewRedactor(nil, nil).RedactWithMatches(text)
+	defer PutMapping(mapping)
+
+	if got != text {
+		t.Fatalf("redacted = %q, want %q", got, text)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("matches = %+v, want none", matches)
 	}
 }
 
@@ -893,4 +950,93 @@ func BenchmarkRedactor(b *testing.B) {
 		}
 		PutMapping(mapping)
 	}
+}
+
+// TestRedactorSetDetectorsReplacesList checks the basic swap: after
+// SetDetectors the next Redact runs only the new detector set.
+func TestRedactorSetDetectorsReplacesList(t *testing.T) {
+	const text = "abcdefghij"
+	email := mockDetector{
+		cat:     CategoryEmail,
+		matches: []Match{{Start: 0, End: 6, Category: CategoryEmail}},
+	}
+	ip := mockDetector{
+		cat:     CategoryIP,
+		matches: []Match{{Start: 0, End: 6, Category: CategoryIP}},
+	}
+
+	r := NewRedactor([]Detector{email}, nil)
+
+	got, mapping := r.Redact(text)
+	if want := "<EMAIL_1>ghij"; got != want {
+		PutMapping(mapping)
+		t.Fatalf("Redact before swap = %q, want %q", got, want)
+	}
+	PutMapping(mapping)
+
+	r.SetDetectors([]Detector{ip})
+
+	got, mapping = r.Redact(text)
+	defer PutMapping(mapping)
+	if want := "<IP_1>ghij"; got != want {
+		t.Fatalf("Redact after swap = %q, want %q", got, want)
+	}
+
+	// An empty detector set turns the redactor into a pass-through.
+	r.SetDetectors(nil)
+	got, mapping = r.Redact(text)
+	PutMapping(mapping)
+	if got != text {
+		t.Fatalf("Redact with no detectors = %q, want %q", got, text)
+	}
+}
+
+// TestRedactorConcurrentRedactAndSetDetectors hammers Redact from several
+// goroutines while the detector list is swapped underneath them. Every result
+// must be one of the two complete configurations: a panic, a crash, or a
+// partially applied list would show up here (and the test suite is also run
+// with -race in CI).
+func TestRedactorConcurrentRedactAndSetDetectors(t *testing.T) {
+	const text = "abcdefghij"
+	email := mockDetector{
+		cat:     CategoryEmail,
+		matches: []Match{{Start: 0, End: 6, Category: CategoryEmail}},
+	}
+	ip := mockDetector{
+		cat:     CategoryIP,
+		matches: []Match{{Start: 0, End: 6, Category: CategoryIP}},
+	}
+	wantEmail := "<EMAIL_1>ghij"
+	wantIP := "<IP_1>ghij"
+
+	r := NewRedactor([]Detector{email}, nil)
+
+	const readers = 8
+	const rounds = 300
+
+	var wg sync.WaitGroup
+	for i := 0; i < readers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < rounds; j++ {
+				got, mapping := r.Redact(text)
+				PutMapping(mapping)
+				if got != wantEmail && got != wantIP {
+					t.Errorf("Redact during swap = %q, want %q or %q", got, wantEmail, wantIP)
+					return
+				}
+			}
+		}()
+	}
+
+	for i := 0; i < rounds; i++ {
+		if i%2 == 0 {
+			r.SetDetectors([]Detector{ip})
+		} else {
+			r.SetDetectors([]Detector{email})
+		}
+	}
+
+	wg.Wait()
 }

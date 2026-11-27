@@ -18,8 +18,14 @@ import (
 	"github.com/local/redactor/internal/logging"
 	"github.com/local/redactor/internal/pii"
 	"github.com/local/redactor/internal/proxy"
+	"github.com/local/redactor/internal/rules"
 	"github.com/local/redactor/internal/ui"
 )
+
+// defaultConfigFile is where the configuration API writes when the process was
+// started without a config file. Saving still requires an explicit PUT, so
+// normal runs never create the file.
+const defaultConfigFile = "config.toml"
 
 func main() {
 	configPath := flag.String("config", "", "path to TOML config file")
@@ -29,24 +35,28 @@ func main() {
 
 	logging.Setup(*logLevel)
 
+	configFile := *configPath
+	if configFile == "" {
+		configFile = findLocalConfig()
+	}
+
 	var cfg *config.Config
-	if *configPath != "" {
+	if configFile != "" {
 		var err error
-		cfg, err = config.Load(*configPath)
+		cfg, err = config.Load(configFile)
 		if err != nil {
-			slog.Error("failed to load config", "path", *configPath, "error", err)
+			slog.Error("failed to load config", "path", configFile, "error", err)
 			os.Exit(1)
 		}
-	} else if localConfig := findLocalConfig(); localConfig != "" {
-		var err error
-		cfg, err = config.Load(localConfig)
-		if err != nil {
-			slog.Error("failed to load config", "path", localConfig, "error", err)
-			os.Exit(1)
+		if *configPath == "" {
+			slog.Info("loaded config from current directory", "path", configFile)
 		}
-		slog.Info("loaded config from current directory", "path", localConfig)
 	} else {
 		cfg = config.DefaultConfig()
+		// The configuration API saves to this path on its first PUT, so give
+		// it a destination even when the process started on defaults.
+		configFile = defaultConfigFile
+		slog.Info("no config file found, using defaults", "save_path", configFile)
 	}
 
 	if *listen != "" {
@@ -72,7 +82,9 @@ func main() {
 	forwarder := proxy.NewForwarder()
 	proxyHandler := proxy.NewHandler(router, forwarder, []proxy.RequestMutator{adapter}, []proxy.ResponseMutator{adapter})
 
-	server := proxy.NewServer(cfg.Listen.Address, newMux(proxyHandler, cfg))
+	api := rules.NewHandler(cfg, configFile, registry, adapter)
+
+	server := proxy.NewServer(cfg.Listen.Address, newMux(proxyHandler, cfg, api))
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -94,17 +106,23 @@ func findLocalConfig() string {
 	return ""
 }
 
-// newMux builds the proxy's HTTP mux: /healthz answers liveness checks, the log
+// newMux builds the proxy's HTTP mux: /healthz answers liveness checks, the
+// configuration API is mounted under /api/config when api is non-nil, the log
 // viewer and its event stream are mounted under /logs when cfg.UI.Enable is set,
 // and every other path is handled by proxyHandler. It is factored out so tests
 // can exercise the exact routing the binary installs.
 //
-// The /logs endpoints are registered before the "/" catch-all because the mux
-// resolves the most specific pattern first; within /logs, the exact
+// The /logs and /api endpoints are registered before the "/" catch-all because
+// the mux resolves the most specific pattern first; within /logs, the exact
 // "/logs/events" pattern wins over the "/logs/" subtree.
-func newMux(proxyHandler http.Handler, cfg *config.Config) *http.ServeMux {
+func newMux(proxyHandler http.Handler, cfg *config.Config, api *rules.Handler) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", health.Handler())
+	if api != nil {
+		mux.HandleFunc("/api/config", api.Config)
+		mux.HandleFunc("/api/config/reload", api.Reload)
+		mux.HandleFunc("/api/config/preview", api.Preview)
+	}
 	if cfg != nil && cfg.UI.Enable {
 		mux.Handle("/logs/events", logging.SSEHandler())
 		mux.Handle("/logs/", ui.Handler())

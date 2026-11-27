@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +20,7 @@ import (
 	"github.com/local/redactor/internal/handler"
 	"github.com/local/redactor/internal/pii"
 	"github.com/local/redactor/internal/proxy"
+	"github.com/local/redactor/internal/rules"
 )
 
 // e2eUpstream records the last request it received and replies with whatever
@@ -474,7 +479,7 @@ func TestE2E_HealthEndpoint(t *testing.T) {
 		[]proxy.ResponseMutator{adapter},
 	)
 
-	srv := proxy.NewServer(addr, newMux(proxyHandler, config.DefaultConfig()))
+	srv := proxy.NewServer(addr, newMux(proxyHandler, config.DefaultConfig(), nil))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -516,7 +521,7 @@ func markerProxy() http.Handler {
 }
 
 func TestNewMuxServesUIWhenEnabled(t *testing.T) {
-	mux := newMux(markerProxy(), config.DefaultConfig())
+	mux := newMux(markerProxy(), config.DefaultConfig(), nil)
 
 	for _, path := range []string{"/logs", "/logs/"} {
 		rec := httptest.NewRecorder()
@@ -563,7 +568,7 @@ func TestNewMuxServesUIWhenEnabled(t *testing.T) {
 // handler rather than the UI subtree. The request context is cancelled up front
 // so the streaming handler returns immediately after writing its headers.
 func TestNewMuxServesSSEWhenEnabled(t *testing.T) {
-	mux := newMux(markerProxy(), config.DefaultConfig())
+	mux := newMux(markerProxy(), config.DefaultConfig(), nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -585,7 +590,7 @@ func TestNewMuxServesSSEWhenEnabled(t *testing.T) {
 func TestNewMuxLogsHiddenWhenUIDisabled(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.UI.Enable = false
-	mux := newMux(markerProxy(), cfg)
+	mux := newMux(markerProxy(), cfg, nil)
 
 	paths := []string{"/logs", "/logs/", "/logs/events", "/logs/app.js", "/logs/style.css"}
 	for _, path := range paths {
@@ -599,6 +604,257 @@ func TestNewMuxLogsHiddenWhenUIDisabled(t *testing.T) {
 			t.Errorf("GET %s X-Handled-By = %q, want the proxy handler", path, got)
 		}
 	}
+}
+
+// newConfigAPIMux wires the config API exactly as the binary does, backed by a
+// temp config file, and returns the live registry so tests can observe reloads.
+func newConfigAPIMux(t *testing.T, cfg *config.Config) (*http.ServeMux, *pii.Registry, string) {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := cfg.Save(path); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	reg, err := pii.NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("pii.NewRegistry: %v", err)
+	}
+	adapter := handler.NewAdapter(reg.Redactor(), reg.Unredactor(), cfg.PII.LogRedacted, cfg.PII.LogBodies)
+	api := rules.NewHandler(cfg, path, reg, adapter)
+	return newMux(markerProxy(), cfg, api), reg, path
+}
+
+// doAPIRequest performs one request against the config API.
+func doAPIRequest(t *testing.T, client *http.Client, method, url string, body []byte) *http.Response {
+	t.Helper()
+
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequest(method, url, reader)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, url, err)
+	}
+	return resp
+}
+
+// mustMarshalJSON marshals v for an API request body.
+func mustMarshalJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	return data
+}
+
+// assertAPISecurityHeaders checks the headers every API response must carry.
+func assertAPISecurityHeaders(t *testing.T, resp *http.Response) {
+	t.Helper()
+	if got := resp.Header.Get("Content-Type"); got != "application/json; charset=utf-8" {
+		t.Errorf("Content-Type = %q, want application/json; charset=utf-8", got)
+	}
+	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+	if got := resp.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("X-Content-Type-Options = %q, want nosniff", got)
+	}
+}
+
+// decodeAPIResponse decodes and closes an API response body.
+func decodeAPIResponse(t *testing.T, resp *http.Response, v any) {
+	t.Helper()
+	defer resp.Body.Close()
+	if err := json.NewDecoder(resp.Body).Decode(v); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+}
+
+// previewAPIResponse mirrors the preview endpoint's wire shape without
+// depending on package rules' unexported types.
+type previewAPIResponse struct {
+	Redacted string `json:"redacted"`
+	Matches  []struct {
+		Category    string `json:"category"`
+		Start       int    `json:"start"`
+		End         int    `json:"end"`
+		Replacement string `json:"replacement"`
+	} `json:"matches"`
+}
+
+// TestNewMuxConfigAPI exercises the full end-to-end flow through the same mux
+// the binary installs: read, write, preview, and reload, including the effect
+// each one has on the live redactor.
+func TestNewMuxConfigAPI(t *testing.T) {
+	cfg := config.DefaultConfig()
+	mux, reg, path := newConfigAPIMux(t, cfg)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	client := srv.Client()
+
+	// GET returns the running config as JSON.
+	resp := doAPIRequest(t, client, http.MethodGet, srv.URL+"/api/config", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/config status = %d, want 200: %s", resp.StatusCode, readBody(t, resp))
+	}
+	assertAPISecurityHeaders(t, resp)
+	var current config.Config
+	decodeAPIResponse(t, resp, &current)
+	if current.Listen.Address != cfg.Listen.Address {
+		t.Errorf("GET listen.address = %q, want %q", current.Listen.Address, cfg.Listen.Address)
+	}
+
+	// PUT persists the document and applies it to the live registry at once.
+	updated := config.DefaultConfig()
+	updated.Listen.Address = "127.0.0.1:9998"
+	updated.PII.EnableEmail = false
+	updated.PII.EnableDomain = false
+
+	resp = doAPIRequest(t, client, http.MethodPut, srv.URL+"/api/config", mustMarshalJSON(t, updated))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT /api/config status = %d, want 200: %s", resp.StatusCode, readBody(t, resp))
+	}
+	assertAPISecurityHeaders(t, resp)
+	var applied config.Config
+	decodeAPIResponse(t, resp, &applied)
+	if applied.Listen.Address != "127.0.0.1:9998" {
+		t.Errorf("PUT response listen.address = %q", applied.Listen.Address)
+	}
+	if applied.PII.EnableEmail {
+		t.Error("PUT response enable_email = true, want false")
+	}
+
+	onDisk, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("reload written config: %v", err)
+	}
+	if onDisk.PII.EnableEmail {
+		t.Error("on-disk enable_email = true, want false")
+	}
+	if onDisk.Listen.Address != "127.0.0.1:9998" {
+		t.Errorf("on-disk listen.address = %q", onDisk.Listen.Address)
+	}
+
+	redacted, mapping := reg.Redactor().Redact("alice@example.com")
+	pii.PutMapping(mapping)
+	if redacted != "alice@example.com" {
+		t.Errorf("live redaction after PUT = %q, want the original text", redacted)
+	}
+
+	// GET reflects the new config.
+	resp = doAPIRequest(t, client, http.MethodGet, srv.URL+"/api/config", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET after PUT status = %d, want 200", resp.StatusCode)
+	}
+	var afterPut config.Config
+	decodeAPIResponse(t, resp, &afterPut)
+	if afterPut.Listen.Address != "127.0.0.1:9998" || afterPut.PII.EnableEmail {
+		t.Errorf("GET after PUT = %+v", afterPut)
+	}
+
+	// Preview GET uses the running (email-disabled) config.
+	text := "My email is alice@example.com"
+	resp = doAPIRequest(t, client, http.MethodGet, srv.URL+"/api/config/preview?text="+url.QueryEscape(text), nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET preview status = %d, want 200: %s", resp.StatusCode, readBody(t, resp))
+	}
+	assertAPISecurityHeaders(t, resp)
+	var preview previewAPIResponse
+	decodeAPIResponse(t, resp, &preview)
+	if strings.Contains(preview.Redacted, "<EMAIL_1>") {
+		t.Errorf("preview redacted an email while email detection is disabled: %q", preview.Redacted)
+	}
+	if len(preview.Matches) != 0 {
+		t.Errorf("preview matches = %+v, want none", preview.Matches)
+	}
+
+	// Preview POST can use a different config without touching live state.
+	previewBody := mustMarshalJSON(t, map[string]any{
+		"text":   text,
+		"config": config.DefaultConfig(),
+	})
+	resp = doAPIRequest(t, client, http.MethodPost, srv.URL+"/api/config/preview", previewBody)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST preview status = %d, want 200: %s", resp.StatusCode, readBody(t, resp))
+	}
+	assertAPISecurityHeaders(t, resp)
+	decodeAPIResponse(t, resp, &preview)
+	if !strings.Contains(preview.Redacted, "<EMAIL_1>") {
+		t.Errorf("preview redacted = %q, want an email placeholder", preview.Redacted)
+	}
+	if len(preview.Matches) != 1 {
+		t.Fatalf("preview matches = %+v, want 1", preview.Matches)
+	}
+	m := preview.Matches[0]
+	if m.Category != "EMAIL" || text[m.Start:m.End] != "alice@example.com" || m.Replacement != "<EMAIL_1>" {
+		t.Errorf("preview match = %+v", m)
+	}
+
+	// The supplied preview config must not leak into live state.
+	redacted, mapping = reg.Redactor().Redact("alice@example.com")
+	pii.PutMapping(mapping)
+	if redacted != "alice@example.com" {
+		t.Errorf("preview changed live redaction to %q", redacted)
+	}
+
+	// Reload re-reads the file from disk and applies it.
+	if err := config.DefaultConfig().Save(path); err != nil {
+		t.Fatalf("rewrite config: %v", err)
+	}
+	resp = doAPIRequest(t, client, http.MethodPost, srv.URL+"/api/config/reload", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST reload status = %d, want 200: %s", resp.StatusCode, readBody(t, resp))
+	}
+	assertAPISecurityHeaders(t, resp)
+	var reloaded config.Config
+	decodeAPIResponse(t, resp, &reloaded)
+	if !reloaded.PII.EnableEmail {
+		t.Error("reload response enable_email = false, want true")
+	}
+	redacted, mapping = reg.Redactor().Redact("alice@example.com")
+	pii.PutMapping(mapping)
+	if !strings.Contains(redacted, "<EMAIL_1>") {
+		t.Errorf("live redaction after reload = %q, want an email placeholder", redacted)
+	}
+
+	// Invalid configs are rejected with the offending field named.
+	invalid := config.DefaultConfig()
+	invalid.Listen.Address = ""
+	resp = doAPIRequest(t, client, http.MethodPut, srv.URL+"/api/config", mustMarshalJSON(t, invalid))
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid PUT status = %d, want 400: %s", resp.StatusCode, readBody(t, resp))
+	}
+	assertAPISecurityHeaders(t, resp)
+	var apiErr struct {
+		Error string `json:"error"`
+		Field string `json:"field"`
+	}
+	decodeAPIResponse(t, resp, &apiErr)
+	if apiErr.Field != "listen.address" {
+		t.Errorf("invalid PUT field = %q, want listen.address", apiErr.Field)
+	}
+
+	// Unsupported methods are rejected without reaching the proxy catch-all.
+	resp = doAPIRequest(t, client, http.MethodDelete, srv.URL+"/api/config", nil)
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("DELETE /api/config status = %d, want 405", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Allow"); got != "GET, PUT" {
+		t.Errorf("DELETE /api/config Allow = %q, want %q", got, "GET, PUT")
+	}
+	if got := resp.Header.Get("X-Handled-By"); got != "" {
+		t.Errorf("DELETE /api/config reached the proxy handler (%s)", got)
+	}
+	_ = readBody(t, resp)
 }
 
 // freePort reserves a loopback port and releases it for the server to bind.

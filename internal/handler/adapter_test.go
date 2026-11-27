@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/local/redactor/internal/config"
+	"github.com/local/redactor/internal/pii"
 	"github.com/local/redactor/internal/proxy"
 )
 
@@ -423,5 +425,91 @@ func TestAdapter_LogBodies(t *testing.T) {
 	}
 	if got := buf.String()[before:]; got != "" {
 		t.Errorf("disabled log_bodies still logged %q", got)
+	}
+}
+
+// TestReloadConfigAppliesDetectorsAndLogToggles drives a live reload through the
+// same entry point the configuration API uses: the detector set and both log
+// toggles change on the running adapter, and the very next request observes the
+// new behaviour.
+func TestReloadConfigAppliesDetectorsAndLogToggles(t *testing.T) {
+	prev := slog.Default()
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	defer slog.SetDefault(prev)
+
+	cfg := config.DefaultConfig()
+	reg, err := pii.NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("pii.NewRegistry: %v", err)
+	}
+	adapter := NewAdapter(reg.Redactor(), reg.Unredactor(), cfg.PII.LogRedacted, cfg.PII.LogBodies)
+
+	const body = `{"messages":[{"role":"user","content":"alice.smith@example.com +14155552671"}]}`
+
+	mutate := func(t *testing.T) []byte {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+		got, err := adapter.MutateRequest(adapterContext(req.Context(), proxy.ProviderOpenAI), req, []byte(body))
+		if err != nil {
+			t.Fatalf("MutateRequest: %v", err)
+		}
+		return got
+	}
+
+	// Before the reload: every detector is on and logging is off.
+	got := mutate(t)
+	if !bytes.Contains(got, []byte("<EMAIL_1>")) || !bytes.Contains(got, []byte("<PHONE_1>")) {
+		t.Fatalf("initial redaction = %s, want EMAIL and PHONE placeholders", got)
+	}
+	if strings.Contains(buf.String(), `"msg":"redacted"`) {
+		t.Fatalf("log_redacted was off but items were logged:\n%s", buf.String())
+	}
+
+	// Disable email, turn both logging options on, and reload.
+	buf.Reset()
+	cfg.PII.EnableEmail = false
+	cfg.PII.LogRedacted = true
+	cfg.PII.LogBodies = true
+	if err := ReloadConfig(reg, adapter, cfg); err != nil {
+		t.Fatalf("ReloadConfig: %v", err)
+	}
+
+	got = mutate(t)
+	if bytes.Contains(got, []byte("<EMAIL_")) || !bytes.Contains(got, []byte("alice.smith@example.com")) {
+		t.Fatalf("email was still redacted after reload: %s", got)
+	}
+	if !bytes.Contains(got, []byte("<PHONE_1>")) {
+		t.Fatalf("phone placeholder missing after reload: %s", got)
+	}
+
+	logged := buf.String()
+	for _, want := range []string{
+		`"msg":"request body (original)"`,
+		`"msg":"request body (redacted)"`,
+		`"msg":"redacted"`,
+		`"placeholder":"<PHONE_1>"`,
+	} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("log output after reload is missing %s:\n%s", want, logged)
+		}
+	}
+
+	// Turn the toggles back off and re-enable email: the next request must be
+	// silent and redact the address again.
+	buf.Reset()
+	cfg.PII.EnableEmail = true
+	cfg.PII.LogRedacted = false
+	cfg.PII.LogBodies = false
+	if err := ReloadConfig(reg, adapter, cfg); err != nil {
+		t.Fatalf("ReloadConfig (second): %v", err)
+	}
+
+	got = mutate(t)
+	if !bytes.Contains(got, []byte("<EMAIL_1>")) {
+		t.Fatalf("email not redacted after second reload: %s", got)
+	}
+	if got := buf.String(); got != "" {
+		t.Errorf("toggles disabled after reload but still logged:\n%s", got)
 	}
 }

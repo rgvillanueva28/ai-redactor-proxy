@@ -2,6 +2,7 @@ package pii
 
 import (
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/local/redactor/internal/config"
@@ -488,6 +489,198 @@ func TestNewRegistryNilConfig(t *testing.T) {
 	if r.Redactor() == nil || r.Unredactor() == nil {
 		t.Fatal("Redactor()/Unredactor() must not be nil")
 	}
+}
+
+// TestRegistryReloadAddsAndRemovesDetectors is the acceptance test for live
+// reload: a config edit that starts or stops redacting a category must be
+// visible on the very next Redact call, without rebuilding the Registry.
+func TestRegistryReloadAddsAndRemovesDetectors(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.PII.EnableEmail = false
+
+	reg, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	if findDetector(reg, CategoryEmail) != nil {
+		t.Fatal("email detector wired despite enable_email = false")
+	}
+
+	const text = "mail foo@bar.com now"
+	if got, mapping := reg.Redactor().Redact(text); got != text {
+		PutMapping(mapping)
+		t.Fatalf("Redact before reload = %q, want unchanged %q", got, text)
+	} else {
+		PutMapping(mapping)
+	}
+
+	// Enable email: the next Redact must redact it.
+	cfg.PII.EnableEmail = true
+	if err := reg.Reload(cfg); err != nil {
+		t.Fatalf("Reload (enable email): %v", err)
+	}
+	if findDetector(reg, CategoryEmail) == nil {
+		t.Fatal("email detector missing after reload with enable_email = true")
+	}
+	got, mapping := reg.Redactor().Redact(text)
+	PutMapping(mapping)
+	if want := "mail <EMAIL_1> now"; got != want {
+		t.Fatalf("Redact after enabling email = %q, want %q", got, want)
+	}
+
+	// Disable it again: the detector must disappear.
+	cfg.PII.EnableEmail = false
+	if err := reg.Reload(cfg); err != nil {
+		t.Fatalf("Reload (disable email): %v", err)
+	}
+	if findDetector(reg, CategoryEmail) != nil {
+		t.Fatal("email detector still wired after reload with enable_email = false")
+	}
+	got, mapping = reg.Redactor().Redact(text)
+	PutMapping(mapping)
+	if got != text {
+		t.Fatalf("Redact after disabling email = %q, want unchanged %q", got, text)
+	}
+}
+
+// TestRegistryReloadRebuildsCustomizations checks that reloading is not limited
+// to the flat toggles: per-category names, patterns and denylists are rebuilt
+// from the new config too.
+func TestRegistryReloadRebuildsCustomizations(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.PII.Domain.Denylist = []string{"example.com"}
+
+	reg, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	cfg.PII.Domain.Denylist = nil
+	cfg.PII.Domain.Patterns = []string{`\bINTERNAL-\d{4}\b`}
+	cfg.PII.Client.Names = []string{"Acme Corp"}
+	if err := reg.Reload(cfg); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	const text = "Acme Corp uses INTERNAL-1234 at example.com"
+	got, mapping := reg.Redactor().Redact(text)
+	defer PutMapping(mapping)
+
+	want := "<CLIENT_1> uses <DOMAIN_1> at <DOMAIN_2>"
+	if got != want {
+		t.Fatalf("Redact after reload = %q, want %q", got, want)
+	}
+}
+
+// TestRegistryReloadUpdatesLogToggles covers the log_redacted / log_bodies half
+// of a live reload: the registry keeps the values from the last applied config
+// so the caller can push them into the request handlers.
+func TestRegistryReloadUpdatesLogToggles(t *testing.T) {
+	cfg := config.DefaultConfig()
+	if cfg.PII.LogRedacted || cfg.PII.LogBodies {
+		t.Fatal("default log toggles must be false for this test")
+	}
+
+	reg, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	if reg.LogRedacted() || reg.LogBodies() {
+		t.Fatalf("initial toggles = (%v, %v), want (false, false)", reg.LogRedacted(), reg.LogBodies())
+	}
+
+	cfg.PII.LogRedacted = true
+	cfg.PII.LogBodies = true
+	if err := reg.Reload(cfg); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if !reg.LogRedacted() || !reg.LogBodies() {
+		t.Fatalf("toggles after reload = (%v, %v), want (true, true)", reg.LogRedacted(), reg.LogBodies())
+	}
+
+	cfg.PII.LogRedacted = false
+	cfg.PII.LogBodies = false
+	if err := reg.Reload(cfg); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if reg.LogRedacted() || reg.LogBodies() {
+		t.Fatalf("toggles after second reload = (%v, %v), want (false, false)", reg.LogRedacted(), reg.LogBodies())
+	}
+}
+
+// TestRegistryReloadNilConfig clears the detector set, mirroring NewRegistry's
+// treatment of a nil config.
+func TestRegistryReloadNilConfig(t *testing.T) {
+	reg, err := NewRegistry(config.DefaultConfig())
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	if len(reg.detectors) == 0 {
+		t.Fatal("default registry has no detectors")
+	}
+
+	if err := reg.Reload(nil); err != nil {
+		t.Fatalf("Reload(nil): %v", err)
+	}
+	if len(reg.detectors) != 0 {
+		t.Fatalf("detector count after Reload(nil) = %d, want 0", len(reg.detectors))
+	}
+
+	const text = "mail foo@bar.com"
+	got, mapping := reg.Redactor().Redact(text)
+	PutMapping(mapping)
+	if got != text {
+		t.Fatalf("Redact after Reload(nil) = %q, want unchanged %q", got, text)
+	}
+}
+
+// TestRegistryConcurrentReloadAndRedact swaps the detector set while requests
+// are being redacted. Every result must be the output of one complete config;
+// the test fails on a panic or a half-built detector list.
+func TestRegistryConcurrentReloadAndRedact(t *testing.T) {
+	withEmail := config.DefaultConfig()
+	withoutEmail := config.DefaultConfig()
+	withoutEmail.PII.EnableEmail = false
+
+	reg, err := NewRegistry(withEmail)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	const text = "mail foo@bar.com now"
+	const redacted = "mail <EMAIL_1> now"
+
+	const readers = 8
+	const rounds = 200
+
+	var wg sync.WaitGroup
+	for i := 0; i < readers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < rounds; j++ {
+				got, mapping := reg.Redactor().Redact(text)
+				PutMapping(mapping)
+				if got != text && got != redacted {
+					t.Errorf("Redact during reload = %q, want %q or %q", got, text, redacted)
+					return
+				}
+			}
+		}()
+	}
+
+	for i := 0; i < rounds; i++ {
+		cfg := withEmail
+		if i%2 == 0 {
+			cfg = withoutEmail
+		}
+		if err := reg.Reload(cfg); err != nil {
+			t.Errorf("Reload: %v", err)
+			break
+		}
+	}
+
+	wg.Wait()
 }
 
 // TestNewRegistryRejectsInvalidReplacementMode verifies that an unknown mode

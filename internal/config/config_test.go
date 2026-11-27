@@ -1,10 +1,12 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -473,6 +475,329 @@ func TestResolveEnabled(t *testing.T) {
 		})
 	}
 }
+
+// saveRoundTripTOML is a non-trivial document: legacy client names, per-category
+// enable overrides, custom names, patterns and a denylist, non-default upstreams
+// and the UI toggle. It exercises every branch Save has to encode.
+const saveRoundTripTOML = sampleTOML + `
+[pii.email]
+enabled = true
+names = ["alerts@corp.io"]
+
+[pii.credit_card]
+patterns = ["\\bCC-\\d{4}-\\d{4}\\b"]
+denylist = ["4111 1111 1111 1111"]
+`
+
+func TestSaveRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(src, []byte(saveRoundTripTOML), 0o600); err != nil {
+		t.Fatalf("write source config: %v", err)
+	}
+
+	first, err := Load(src)
+	if err != nil {
+		t.Fatalf("Load source: %v", err)
+	}
+
+	saved := filepath.Join(dir, "saved.toml")
+	if err := first.Save(saved); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	second, err := Load(saved)
+	if err != nil {
+		t.Fatalf("Load saved: %v", err)
+	}
+
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("round trip changed the config:\n first = %#v\nsecond = %#v", first, second)
+	}
+
+	// Spot-check the values that are easiest to lose when encoding.
+	if second.Listen.Address != "127.0.0.1:9443" {
+		t.Errorf("listen.address = %q, want 127.0.0.1:9443", second.Listen.Address)
+	}
+	if !second.PII.LogRedacted || !second.PII.LogBodies {
+		t.Errorf("log toggles = (%v, %v), want (true, true)", second.PII.LogRedacted, second.PII.LogBodies)
+	}
+	if want := []string{`\bCC-\d{4}-\d{4}\b`}; !reflect.DeepEqual(second.PII.CreditCard.Patterns, want) {
+		t.Errorf("credit_card.patterns = %#v, want %#v", second.PII.CreditCard.Patterns, want)
+	}
+	if second.PII.Email.Enabled == nil || !*second.PII.Email.Enabled {
+		t.Errorf("email.enabled = %v, want explicit true", second.PII.Email.Enabled)
+	}
+	if second.UI.Enable {
+		t.Error("ui.enable = true, want false")
+	}
+}
+
+// TestSaveLegacyClientNamesRoundTripIsIdempotent pins the reason
+// MergeLegacyClientNames dedupes: Save writes both the merged [pii.client]
+// block and the legacy [pii.client_names] block, so a second Load must not
+// append the legacy names again.
+func TestSaveLegacyClientNamesRoundTripIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(src, []byte(`
+[pii.client_names]
+names = ["Acme Corp", "Globex"]
+`), 0o600); err != nil {
+		t.Fatalf("write source config: %v", err)
+	}
+
+	first, err := Load(src)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if want := []string{"Acme Corp", "Globex"}; !reflect.DeepEqual(first.PII.Client.Names, want) {
+		t.Fatalf("client names = %#v, want %#v", first.PII.Client.Names, want)
+	}
+
+	saved := filepath.Join(dir, "saved.toml")
+	if err := first.Save(saved); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	second, err := Load(saved)
+	if err != nil {
+		t.Fatalf("Load saved: %v", err)
+	}
+	if want := []string{"Acme Corp", "Globex"}; !reflect.DeepEqual(second.PII.Client.Names, want) {
+		t.Fatalf("client names after round trip = %#v, want %#v", second.PII.Client.Names, want)
+	}
+}
+
+func TestSaveOverwritesExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte("not toml at all"), 0o600); err != nil {
+		t.Fatalf("write existing file: %v", err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.Listen.Address = "127.0.0.1:7777"
+	cfg.PII.Email.Patterns = []string{`\bX-\d+\b`}
+
+	if err := cfg.Save(path); err != nil {
+		t.Fatalf("Save over existing file: %v", err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.Listen.Address != "127.0.0.1:7777" {
+		t.Errorf("listen.address = %q, want 127.0.0.1:7777", got.Listen.Address)
+	}
+	if want := []string{`\bX-\d+\b`}; !reflect.DeepEqual(got.PII.Email.Patterns, want) {
+		t.Errorf("email.patterns = %#v, want %#v", got.PII.Email.Patterns, want)
+	}
+
+	// The temporary file must be gone after a successful save.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "config.toml" {
+		names := make([]string, len(entries))
+		for i, e := range entries {
+			names[i] = e.Name()
+		}
+		t.Fatalf("directory entries = %v, want only config.toml", names)
+	}
+}
+
+func TestSaveMissingDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing", "config.toml")
+	err := DefaultConfig().Save(path)
+	if err == nil {
+		t.Fatal("Save into a missing directory returned nil error")
+	}
+	if !strings.Contains(err.Error(), "config: save") {
+		t.Errorf("error = %q, want save context", err)
+	}
+}
+
+func TestSaveFilePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not map Unix permission bits")
+	}
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := DefaultConfig().Save(path); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if perm := fi.Mode().Perm(); perm != 0o600 {
+		t.Errorf("file permissions = %o, want 600", perm)
+	}
+}
+
+func TestValidateAcceptsDefaults(t *testing.T) {
+	if err := DefaultConfig().Validate(); err != nil {
+		t.Fatalf("Validate(DefaultConfig) = %v, want nil", err)
+	}
+	if err := (*Config)(nil).Validate(); err == nil {
+		t.Fatal("Validate(nil) returned nil error")
+	}
+}
+
+func TestValidateRejectsBadListenAddress(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Listen.Address = "   "
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate with empty listen.address returned nil error")
+	}
+	if !strings.Contains(err.Error(), "config: validate:") || !strings.Contains(err.Error(), "listen.address") {
+		t.Errorf("error = %q, want validate context naming listen.address", err)
+	}
+}
+
+func TestValidateRejectsBadUpstream(t *testing.T) {
+	tests := []struct {
+		name string
+		up   UpstreamConfig
+		want string
+	}{
+		{"missing_host_match", UpstreamConfig{BaseURL: "https://api.example.com"}, "host_match"},
+		{"missing_base_url", UpstreamConfig{HostMatch: "api.example.com"}, "base_url"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.Upstream["broken"] = tt.up
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatal("Validate returned nil error")
+			}
+			if !strings.Contains(err.Error(), `upstream "broken"`) || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %q, want it to name upstream \"broken\" and %s", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsInvalidPatternNamingCategory(t *testing.T) {
+	// Every per-category block must be checked, and the error has to say which
+	// one is broken so the API can point at the offending field.
+	for _, cat := range DefaultConfig().categoryConfigs() {
+		t.Run(cat.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.setCategoryPatterns(cat.name, []string{`(unclosed`})
+
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatal("Validate accepted an invalid pattern")
+			}
+			msg := err.Error()
+			if !strings.Contains(msg, "config: validate:") {
+				t.Errorf("error = %q, want validate context", msg)
+			}
+			if want := "pii." + cat.name + ".patterns[0]"; !strings.Contains(msg, want) {
+				t.Errorf("error = %q, want it to contain %q", msg, want)
+			}
+		})
+	}
+}
+
+func TestValidateAcceptsValidPatterns(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.PII.Email.Patterns = []string{`\bX-\d+\b`}
+	cfg.PII.Phone.Patterns = []string{`\+1\d{10}`}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+}
+
+// setCategoryPatterns writes patterns into the named per-category block. It
+// keeps TestValidateRejectsInvalidPatternNamingCategory from listing every
+// field by hand and silently drifting from categoryConfigs.
+func (c *Config) setCategoryPatterns(name string, patterns []string) {
+	switch name {
+	case "email":
+		c.PII.Email.Patterns = patterns
+	case "phone":
+		c.PII.Phone.Patterns = patterns
+	case "credit_card":
+		c.PII.CreditCard.Patterns = patterns
+	case "ssn":
+		c.PII.SSN.Patterns = patterns
+	case "ip":
+		c.PII.IP.Patterns = patterns
+	case "path":
+		c.PII.Path.Patterns = patterns
+	case "api_key":
+		c.PII.APIKey.Patterns = patterns
+	case "domain":
+		c.PII.Domain.Patterns = patterns
+	case "client":
+		c.PII.Client.Patterns = patterns
+	case "credential":
+		c.PII.Credential.Patterns = patterns
+	case "person_name":
+		c.PII.PersonName.Patterns = patterns
+	}
+}
+
+func TestJSONRoundTrip(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Listen.Address = "0.0.0.0:9000"
+	cfg.PII.LogRedacted = true
+	cfg.PII.LogBodies = true
+	cfg.PII.EnableEmail = false
+	yes := true
+	cfg.PII.Phone.Enabled = &yes
+	cfg.PII.Email.Names = []string{"alerts@corp.io"}
+	cfg.PII.Email.Patterns = []string{`\bX-\d+\b`}
+	cfg.PII.Client.Denylist = []string{"Acme"}
+
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	var back Config
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(cfg, &back) {
+		t.Fatalf("JSON round trip changed the config:\n got = %#v\nwant = %#v", &back, cfg)
+	}
+
+	// The wire format uses the toml key names so the API and the file agree.
+	for _, key := range []string{
+		`"listen"`, `"pii"`, `"upstream"`, `"ui"`,
+		`"enable_email"`, `"log_redacted"`, `"log_bodies"`,
+		`"credit_card"`, `"api_key"`, `"person_name"`, `"client_names"`,
+		`"enabled"`, `"names"`, `"patterns"`, `"denylist"`,
+		`"host_match"`, `"base_url"`,
+	} {
+		if !strings.Contains(string(data), key) {
+			t.Errorf("JSON output is missing key %s:\n%s", key, data)
+		}
+	}
+}
+
+func TestJSONRoundTripDefaultConfig(t *testing.T) {
+	data, err := json.Marshal(DefaultConfig())
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	var back Config
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(&back, DefaultConfig()) {
+		t.Fatalf("JSON round trip changed the defaults:\n got = %#v\nwant = %#v", &back, DefaultConfig())
+	}
+}
+
 
 func TestParseReplacementModeFields(t *testing.T) {
 	tests := []struct {
