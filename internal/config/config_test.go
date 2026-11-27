@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -470,5 +471,142 @@ func TestResolveEnabled(t *testing.T) {
 				t.Errorf("ResolveEnabled(flat=%v) = %v, want %v", tt.flatToggle, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestParseReplacementModeFields(t *testing.T) {
+	tests := []struct {
+		name     string
+		toml     string
+		wantMode string
+		wantText string
+	}{
+		{
+			name:     "omitted mode and text default to empty",
+			toml:     "[pii.email]\nnames = [\"a@b.com\"]\n",
+			wantMode: "",
+			wantText: "",
+		},
+		{
+			name:     "explicit placeholder mode",
+			toml:     "[pii.email]\nmode = \"placeholder\"\n",
+			wantMode: "placeholder",
+			wantText: "",
+		},
+		{
+			name:     "custom mode with text",
+			toml:     "[pii.email]\nmode = \"custom\"\ntext = \"[EMAIL]\"\n",
+			wantMode: "custom",
+			wantText: "[EMAIL]",
+		},
+		{
+			name:     "unknown mode is preserved for later validation",
+			toml:     "[pii.email]\nmode = \"mask\"\n",
+			wantMode: "mask",
+			wantText: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := parse([]byte(tt.toml))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			email := cfg.PII.Email
+			if email.Mode != tt.wantMode {
+				t.Errorf("pii.email.mode = %q, want %q", email.Mode, tt.wantMode)
+			}
+			if email.Text != tt.wantText {
+				t.Errorf("pii.email.text = %q, want %q", email.Text, tt.wantText)
+			}
+		})
+	}
+}
+
+func TestResolveMode(t *testing.T) {
+	tests := []struct {
+		name     string
+		cat      CategoryConfig
+		wantMode string
+		wantText string
+		wantErr  error
+	}{
+		{
+			name:     "empty mode defaults to placeholder",
+			cat:      CategoryConfig{},
+			wantMode: ModePlaceholder,
+			wantText: "",
+		},
+		{
+			name:     "explicit placeholder mode ignores text",
+			cat:      CategoryConfig{Mode: "placeholder", Text: "[IGNORED]"},
+			wantMode: ModePlaceholder,
+			wantText: "",
+		},
+		{
+			name:     "custom mode returns replacement text",
+			cat:      CategoryConfig{Mode: "custom", Text: "[EMAIL]"},
+			wantMode: ModeCustom,
+			wantText: "[EMAIL]",
+		},
+		{
+			name:    "custom mode without text is rejected",
+			cat:     CategoryConfig{Mode: "custom"},
+			wantErr: ErrMissingReplacementText,
+		},
+		{
+			name:    "unknown mode is rejected",
+			cat:     CategoryConfig{Mode: "mask", Text: "***"},
+			wantErr: ErrInvalidMode,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mode, text, err := ResolveMode(tt.cat)
+			if tt.wantErr != nil {
+				if err == nil {
+					t.Fatalf("ResolveMode(%#v) error = nil, want %v", tt.cat, tt.wantErr)
+				}
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("ResolveMode(%#v) error = %v, want errors.Is %v", tt.cat, err, tt.wantErr)
+				}
+				if !strings.HasPrefix(err.Error(), "config: ") {
+					t.Errorf("ResolveMode(%#v) error = %q, want \"config: \" prefix", tt.cat, err)
+				}
+				if mode != "" || text != "" {
+					t.Errorf("ResolveMode(%#v) = (%q, %q) on error, want empty results", tt.cat, mode, text)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ResolveMode(%#v) error = %v, want nil", tt.cat, err)
+			}
+			if mode != tt.wantMode {
+				t.Errorf("ResolveMode(%#v) mode = %q, want %q", tt.cat, mode, tt.wantMode)
+			}
+			if text != tt.wantText {
+				t.Errorf("ResolveMode(%#v) text = %q, want %q", tt.cat, text, tt.wantText)
+			}
+		})
+	}
+}
+
+func TestResolveModeErrorMessages(t *testing.T) {
+	_, _, err := ResolveMode(CategoryConfig{Mode: "mask"})
+	if err == nil {
+		t.Fatal("ResolveMode(mask) error = nil, want error")
+	}
+	if want := `config: invalid mode "mask"`; !strings.Contains(err.Error(), want) {
+		t.Errorf("error = %q, want it to contain %q", err, want)
+	}
+
+	_, _, err = ResolveMode(CategoryConfig{Mode: ModeCustom})
+	if err == nil {
+		t.Fatal("ResolveMode(custom, no text) error = nil, want error")
+	}
+	if want := "config: custom mode requires replacement text"; !strings.Contains(err.Error(), want) {
+		t.Errorf("error = %q, want it to contain %q", err, want)
 	}
 }
