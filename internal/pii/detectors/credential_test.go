@@ -95,7 +95,7 @@ func TestCredentialDetector(t *testing.T) {
 		},
 		{
 			name: "negative_host_port",
-			text: "https://api.example.com:8443/v1",
+			text: "https://api.example.com:28443/v1",
 			want: nil,
 		},
 	}

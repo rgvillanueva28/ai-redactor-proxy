@@ -282,8 +282,8 @@ func TestLoadInvalidFile(t *testing.T) {
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
 
-	if cfg.Listen.Address != "127.0.0.1:8443" {
-		t.Errorf("listen.address = %q, want 127.0.0.1:8443", cfg.Listen.Address)
+	if cfg.Listen.Address != "127.0.0.1:28443" {
+		t.Errorf("listen.address = %q, want 127.0.0.1:28443", cfg.Listen.Address)
 	}
 
 	pii := cfg.PII
@@ -797,7 +797,6 @@ func TestJSONRoundTripDefaultConfig(t *testing.T) {
 		t.Fatalf("JSON round trip changed the defaults:\n got = %#v\nwant = %#v", &back, DefaultConfig())
 	}
 }
-
 
 func TestParseReplacementModeFields(t *testing.T) {
 	tests := []struct {

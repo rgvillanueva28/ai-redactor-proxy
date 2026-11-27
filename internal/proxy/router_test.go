@@ -27,7 +27,7 @@ func TestRouterResolve(t *testing.T) {
 		{
 			name:         "openai host with port and mixed case",
 			method:       "POST",
-			url:          "https://API.OPENAI.COM:8443/v1/chat/completions",
+			url:          "https://API.OPENAI.COM:28443/v1/chat/completions",
 			wantProvider: ProviderOpenAI,
 			wantUpstream: "https://api.openai.com",
 		},
@@ -140,7 +140,7 @@ func TestRouterResolveNilRequest(t *testing.T) {
 
 func TestRouterWithProvider(t *testing.T) {
 	router := NewRouter().
-		WithProvider("llm.internal", "https://llm.internal:8443/").
+		WithProvider("llm.internal", "https://llm.internal:28443/").
 		WithProvider("mirror-openai.example.com", "https://api.openai.com/v1/")
 
 	tests := []struct {
@@ -153,7 +153,7 @@ func TestRouterWithProvider(t *testing.T) {
 			name:         "custom generic host",
 			url:          "https://llm.internal/v1/chat",
 			wantProvider: ProviderGeneric,
-			wantUpstream: "https://llm.internal:8443",
+			wantUpstream: "https://llm.internal:28443",
 		},
 		{
 			name:         "custom host infers openai from upstream",

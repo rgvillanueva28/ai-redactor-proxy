@@ -181,7 +181,7 @@ type UIConfig struct {
 // explicit enable override.
 func DefaultConfig() *Config {
 	return &Config{
-		Listen: ListenConfig{Address: "127.0.0.1:8443"},
+		Listen: ListenConfig{Address: "127.0.0.1:28443"},
 		PII: PIIConfig{
 			EnableEmail:      true,
 			EnablePhone:      true,

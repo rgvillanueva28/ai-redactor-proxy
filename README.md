@@ -11,7 +11,7 @@ go build -o redactor ./cmd/redactor
 
 ### Development
 ```bash
-# Run with defaults (listens on 127.0.0.1:8443)
+# Run with defaults (listens on 127.0.0.1:28443)
 ./redactor
 
 # Or drop a config.toml in the current directory - auto-detected
@@ -38,14 +38,14 @@ sudo systemctl start redactor
 
 ## Configuration
 
-The proxy looks for `config.toml` in the current directory on startup. If found, it is used automatically. Otherwise, built-in defaults apply (listen on `127.0.0.1:8443`, all detectors enabled except `person_name`).
+The proxy looks for `config.toml` in the current directory on startup. If found, it is used automatically. Otherwise, built-in defaults apply (listen on `127.0.0.1:28443`, all detectors enabled except `person_name`).
 
 You can override this with the `--config` flag to specify any path.
 
 Create `config.toml`:
 ```toml
 [listen]
-address = "127.0.0.1:8443"
+address = "127.0.0.1:28443"
 
 [pii]
 enable_email = true
@@ -79,9 +79,7 @@ enable = true  # Serve the real-time log viewer at /logs (default: true)
 
 Every detector has a flat on/off toggle and its own placeholder prefix. All are
 enabled by default except `person_name`, whose heuristic is noisy enough to be
-opt-in. The placeholder column shows the default output; any category can
-instead use a fixed custom replacement (see
-[Replacement modes](#replacement-modes)).
+opt-in.
 
 | Category    | Toggle               | Placeholder  | Detects |
 |-------------|----------------------|--------------|---------|
@@ -161,102 +159,35 @@ TOML note: in basic (double-quoted) strings a backslash must be doubled, hence
 `"\\bINTERNAL-\\d{4}\\b"`. Literal (single-quoted) strings keep backslashes
 as written: `patterns = ['\bINTERNAL-\d{4}\b']`.
 
-### Replacement modes
-
-Every category chooses how its matches are replaced with the `mode` key of the
-same `[pii.<category>]` block:
-
-```toml
-[pii.email]
-enabled = true
-mode = "custom"
-text = "[EMAIL]"
-```
-
-| Mode | Replacement | Example output |
-|------|-------------|----------------|
-| `placeholder` | Numbered tag per distinct value (default) | `<EMAIL_1>`, `<EMAIL_2>` |
-| `custom` | One fixed string for every match | `[EMAIL]` |
-
-- `placeholder` is the default and needs no configuration. Each new value in a
-  category takes the next number, and a value repeated within one request reuses
-  the tag it was already given.
-- `custom` replaces every match in that category with exactly the configured
-  `text`.
-- `text` is required when `mode = "custom"`. An empty `text` is a configuration
-  error, and `text` is ignored in `placeholder` mode.
-- An unknown `mode` is rejected too. Both errors are reported while the proxy
-  starts, even for a category whose detector is disabled, so a typo cannot pass
-  silently.
-
-Modes are set per category and mix freely, so you can use readable markers only
-where you want them:
-
-```toml
-# Readable markers for the values that matter most.
-[pii.email]
-mode = "custom"
-text = "[EMAIL]"
-
-# Keep numbered tags elsewhere (this is the default, shown for clarity).
-[pii.phone]
-mode = "placeholder"
-
-# Custom text does not have to look like a placeholder.
-[pii.credential]
-mode = "custom"
-text = "<secret>"
-
-# Also works together with names, patterns, and denylist.
-[pii.domain]
-mode = "custom"
-text = "[DOMAIN]"
-denylist = ["example.com"]
-```
-
-The mode applies to everything the category reports, including hits from
-`names` and `patterns`, and composes with `enabled` in either direction. It does
-not change detection, only the replacement string.
-
-Both modes record a per-request mapping, so the unredactor restores the original
-value when the upstream response echoes the replacement back. There is one
-inherent difference: in `custom` mode every value of a category shares a single
-replacement string and therefore a single mapping entry, so a request containing
-two different emails ends up with one mapping entry and only the most recently
-seen email can be restored. Use `placeholder` mode when distinct values of the
-same category must round-trip exactly; `custom` mode is best for a category
-where a readable marker matters more than exact restoration, or where the
-category rarely has more than one value per request.
-
 ## Usage with AI CLIs
 
 ### Claude Code
 ```bash
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8443
+export ANTHROPIC_BASE_URL=http://127.0.0.1:28443
 claude
 ```
 
 ### OpenAI CLI
 ```bash
-export OPENAI_BASE_URL=http://127.0.0.1:8443
+export OPENAI_BASE_URL=http://127.0.0.1:28443
 openai-cli
 ```
 
 ### Gemini CLI
 ```bash
 # Set base URL to proxy
-gemini-cli --base-url=http://127.0.0.1:8443
+gemini-cli --base-url=http://127.0.0.1:28443
 ```
 
 ## Health Check
 ```bash
-curl http://127.0.0.1:8443/healthz
+curl http://127.0.0.1:28443/healthz
 ```
 
 ## Live Log Viewer
 
 The proxy serves a real-time log viewer on the same port as the proxy itself.
-Open `http://127.0.0.1:8443/logs` in a browser to watch the proxy's structured
+Open `http://127.0.0.1:28443/logs` in a browser to watch the proxy's structured
 JSON logs as they are emitted.
 
 - Log records are streamed over Server-Sent Events from `/logs/events`.
@@ -308,7 +239,7 @@ sudo systemctl start redactor
 
 1. **Request interception**: The proxy receives requests from AI CLIs
 2. **PII detection**: Scans JSON bodies for emails, phone numbers, credit cards, SSNs, IPs, file paths, API keys, credentials, domains, and custom client names
-3. **Redaction**: Replaces detected PII with placeholders (e.g., `<EMAIL_1>`, `<PHONE_2>`) or, per category, a configured custom text (e.g., `[EMAIL]`)
+3. **Redaction**: Replaces detected PII with placeholders (e.g., `<EMAIL_1>`, `<PHONE_2>`)
 4. **Forwarding**: Sends sanitized request to the real upstream API
 5. **Unredaction**: Restores original PII in the response before returning to the client
 
