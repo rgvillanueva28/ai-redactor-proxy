@@ -137,13 +137,13 @@
   >
     <button
       type="button"
-      class="absolute inset-0 cursor-default bg-black/60 backdrop-blur-sm"
+      class="absolute inset-0 cursor-default bg-background/80 backdrop-blur-sm"
       aria-label="Cancel"
       onclick={close}
     ></button>
 
     <div
-      class="relative w-full max-w-md rounded-lg border border-border bg-card p-5 text-card-foreground shadow-2xl"
+      class="relative w-full max-w-md rounded-lg border border-border/80 bg-card p-5 text-card-foreground shadow-[0_30px_80px_-24px_rgba(2,6,23,0.95)]"
     >
       <h2 id="config-dialog-title" class="text-base font-semibold">
         {intent === "save" ? "Save configuration?" : "Reload configuration?"}
@@ -151,20 +151,20 @@
       <p id="config-dialog-description" class="mt-2 text-sm leading-relaxed text-muted-foreground">
         {#if intent === "save"}
           This writes
-          <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs text-foreground/80">
+          <code class="rounded bg-muted/60 px-1 py-0.5 font-mono text-xs text-foreground/80">
             config.toml
           </code>
           and reloads the running proxy. Redaction changes apply to all future
           requests; logging changes take effect immediately.
         {:else if dirty}
           Reloading discards your unsaved changes and re-reads
-          <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs text-foreground/80">
+          <code class="rounded bg-muted/60 px-1 py-0.5 font-mono text-xs text-foreground/80">
             config.toml
           </code>
           from disk.
         {:else}
           Re-read
-          <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs text-foreground/80">
+          <code class="rounded bg-muted/60 px-1 py-0.5 font-mono text-xs text-foreground/80">
             config.toml
           </code>
           from disk and apply it to the running proxy.
@@ -174,7 +174,7 @@
       {#if localError !== ""}
         <p
           role="alert"
-          class="mt-3 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive"
+          class="mt-3 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-rose-300"
         >
           {localError}
         </p>

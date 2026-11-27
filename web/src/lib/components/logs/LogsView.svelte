@@ -33,11 +33,11 @@
   };
 
   const statusDots: Record<ConnectionState, string> = {
-    connected: "bg-emerald-500",
+    connected: "bg-accent shadow-[0_0_8px_1px_rgba(34,197,94,0.6)]",
     connecting: "bg-amber-400 animate-pulse",
     reconnecting: "bg-amber-400 animate-pulse",
-    disconnected: "bg-rose-500",
-    unsupported: "bg-zinc-500",
+    disconnected: "bg-destructive",
+    unsupported: "bg-muted-foreground",
   };
 
   let viewer = $state<HTMLDivElement | null>(null);
@@ -158,21 +158,21 @@
 
   function filterButtonClass(value: LevelFilter): string {
     return level === value
-      ? "border-transparent bg-secondary text-secondary-foreground"
-      : "border-border/70 bg-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground";
+      ? "border-border bg-secondary text-foreground"
+      : "border-border/70 bg-transparent text-muted-foreground hover:border-border hover:bg-secondary/60 hover:text-foreground";
   }
 </script>
 
 <svelte:window onkeydown={handleWindowKeydown} />
 
 <section class="flex h-full flex-col overflow-hidden" aria-label="Live logs">
-  <div class="shrink-0 space-y-3 border-b border-border/60 bg-card/30 px-4 py-3 sm:px-6">
+  <div class="shrink-0 space-y-3 border-b border-border/70 bg-card/40 px-4 py-3 sm:px-6">
     <div class="flex flex-wrap items-center gap-2">
       <div class="flex flex-wrap items-center gap-1.5" role="group" aria-label="Filter by log level">
         {#each levelFilters as filter (filter.value)}
           <button
             type="button"
-            class="inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring {filterButtonClass(
+            class="inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 {filterButtonClass(
               filter.value,
             )}"
             aria-pressed={level === filter.value}
@@ -207,7 +207,7 @@
           spellcheck="false"
           aria-label="Search logs"
           title="Press / to search"
-          class="h-9 w-full rounded-md border border-input bg-background/60 pl-8 pr-3 text-sm text-foreground placeholder:text-muted-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          class="h-9 w-full rounded-md border border-border bg-background/70 pl-8 pr-3 text-sm text-foreground placeholder:text-muted-foreground focus-visible:border-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
           oninput={scheduleSearch}
           onkeydown={handleSearchKeydown}
         />
@@ -254,7 +254,7 @@
       {/if}
 
       <span class="ml-auto hidden items-center gap-1 sm:inline-flex">
-        Streaming from <code class="font-mono text-muted-foreground/90">/logs/events</code>
+        Streaming from <code class="font-mono text-accent/80">/logs/events</code>
       </span>
     </div>
   </div>
@@ -271,7 +271,7 @@
   >
     {#if filtered.length === 0}
       <div class="flex min-h-full flex-col items-center justify-center gap-2 px-6 py-16 text-center">
-        <span class="flex h-10 w-10 items-center justify-center rounded-full border border-border/60 bg-muted/30 text-muted-foreground">
+        <span class="flex h-10 w-10 items-center justify-center rounded-full border border-border/70 bg-muted/30 text-muted-foreground">
           <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
             <path
               d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v9a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12.5v-9ZM3.5 3a.5.5 0 0 0-.5.5v9a.5.5 0 0 0 .5.5h9a.5.5 0 0 0 .5-.5v-9a.5.5 0 0 0-.5-.5h-9Z"

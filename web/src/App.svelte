@@ -17,21 +17,21 @@
 
   function tabClass(path: "/logs" | "/config"): string {
     return router.location === path
-      ? "bg-accent text-accent-foreground"
-      : "text-muted-foreground hover:bg-accent/60 hover:text-accent-foreground";
+      ? "bg-accent text-accent-foreground shadow-[0_0_18px_-6px_rgba(34,197,94,0.85)]"
+      : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground";
   }
 </script>
 
 <div class="flex h-screen flex-col bg-background text-foreground">
-  <header class="shrink-0 border-b border-border/60 bg-card/40 backdrop-blur">
+  <header class="shrink-0 border-b border-border/70 bg-card/50 backdrop-blur">
     <div class="mx-auto flex h-14 w-full max-w-7xl items-center gap-4 px-4 sm:px-6">
       <a
         href="/logs"
         use:link
-        class="flex items-center gap-2.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        class="group flex items-center gap-2.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/70"
       >
         <span
-          class="flex h-7 w-7 items-center justify-center rounded-md bg-gradient-to-br from-primary to-primary/60 text-[11px] font-bold text-primary-foreground shadow-sm"
+          class="flex h-7 w-7 items-center justify-center rounded-md border border-accent/40 bg-accent/10 font-mono text-[11px] font-bold text-accent shadow-[0_0_10px_-4px_rgba(34,197,94,0.7)] transition-shadow group-hover:shadow-[0_0_18px_-4px_rgba(34,197,94,0.9)]"
           aria-hidden="true"
         >
           R
@@ -48,7 +48,7 @@
         <a
           href="/logs"
           use:link
-          class="inline-flex h-8 items-center rounded-md px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring {tabClass(
+          class="inline-flex h-8 items-center rounded-md px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/70 {tabClass(
             '/logs',
           )}"
           aria-current={router.location === "/logs" ? "page" : undefined}
@@ -58,7 +58,7 @@
         <a
           href="/config"
           use:link
-          class="inline-flex h-8 items-center rounded-md px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring {tabClass(
+          class="inline-flex h-8 items-center rounded-md px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/70 {tabClass(
             '/config',
           )}"
           aria-current={router.location === "/config" ? "page" : undefined}
@@ -67,7 +67,8 @@
         </a>
       </nav>
 
-      <span class="ml-auto hidden text-[11px] text-muted-foreground md:block">
+      <span class="ml-auto hidden items-center gap-1.5 text-[11px] text-muted-foreground md:flex">
+        <span class="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden="true"></span>
         Everything stays on this machine
       </span>
     </div>

@@ -44,15 +44,15 @@
 >
   <button
     type="button"
-    class="absolute inset-0 cursor-default bg-black/60 backdrop-blur-sm"
+    class="absolute inset-0 cursor-default bg-background/80 backdrop-blur-sm"
     aria-label="Close log entry details"
     onclick={onclose}
   ></button>
 
   <div
-    class="relative flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-border bg-card text-card-foreground shadow-2xl"
+    class="relative flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-border/80 bg-card text-card-foreground shadow-[0_30px_80px_-24px_rgba(2,6,23,0.95)]"
   >
-    <header class="flex shrink-0 items-center gap-3 border-b border-border px-5 py-3">
+    <header class="flex shrink-0 items-center gap-3 border-b border-border/70 px-5 py-3">
       <h2 id="log-detail-title" class="text-sm font-semibold">Log entry</h2>
       <LevelBadge level={entry.level} />
       <button
@@ -83,7 +83,7 @@
           {entry.time.title || entry.time.display || "(no timestamp)"}
         </span>
         {#if entry.time.iso}
-          <span class="font-mono text-muted-foreground/70">{entry.time.iso}</span>
+          <span class="font-mono text-muted-foreground/90">{entry.time.iso}</span>
         {/if}
       </div>
 
@@ -92,7 +92,7 @@
           Message
         </h3>
         <pre
-          class="whitespace-pre-wrap break-words rounded-md border border-border/60 bg-muted/30 p-3 font-mono text-xs text-foreground/90"
+          class="whitespace-pre-wrap break-words rounded-md border border-border/70 bg-background/60 p-3 font-mono text-xs text-foreground/90"
         >{entry.message || "(no message)"}</pre>
       </section>
 
@@ -104,7 +104,7 @@
           <dl class="grid gap-2">
             {#each entry.fields as field (field.key)}
               <div
-                class="grid grid-cols-1 gap-1 rounded-md border border-border/50 bg-muted/20 p-2 sm:grid-cols-[minmax(0,14rem)_1fr]"
+                class="grid grid-cols-1 gap-1 rounded-md border border-border/60 bg-background/40 p-2 sm:grid-cols-[minmax(0,14rem)_1fr]"
               >
                 <dt class="break-all font-mono text-[11px] text-muted-foreground">
                   {field.key}

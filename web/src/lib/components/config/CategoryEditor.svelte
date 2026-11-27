@@ -82,12 +82,12 @@
 
 <article
   class={cn(
-    "rounded-lg border bg-card/30 transition-colors",
-    error !== "" ? "border-destructive/60" : "border-border/60",
+    "rounded-lg border bg-card/40 transition-colors",
+    error !== "" ? "border-destructive/60" : "border-border/80",
   )}
   aria-labelledby="category-{meta.key}-title"
 >
-  <header class="flex items-start gap-3 border-b border-border/50 px-4 py-3">
+  <header class="flex items-start gap-3 border-b border-border/60 px-4 py-3">
     <button
       type="button"
       role="switch"
@@ -96,13 +96,15 @@
       onclick={() => onenabledchange(!enabled)}
       {disabled}
       class={cn(
-        "relative mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50",
-        enabled ? "bg-primary" : "bg-muted",
+        "relative mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50",
+        enabled
+          ? "bg-accent shadow-[0_0_10px_-2px_rgba(34,197,94,0.8)]"
+          : "bg-muted",
       )}
     >
       <span
         class={cn(
-          "pointer-events-none block h-4 w-4 rounded-full bg-background shadow transition-transform",
+          "pointer-events-none block h-4 w-4 rounded-full bg-white shadow transition-transform",
           enabled ? "translate-x-4" : "translate-x-0.5",
         )}
       ></span>
@@ -114,14 +116,14 @@
         class="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium"
       >
         <span>{meta.label}</span>
-        <code class="rounded bg-muted px-1 py-0.5 font-mono text-[10px] font-normal text-muted-foreground">
+        <code class="rounded bg-muted/60 px-1 py-0.5 font-mono text-[10px] font-normal text-muted-foreground">
           {meta.placeholder}
         </code>
         <span
           class={cn(
             "rounded-full border px-1.5 py-0.5 text-[10px] font-medium",
             enabled
-              ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+              ? "border-accent/40 bg-accent/10 text-accent"
               : "border-border bg-muted/50 text-muted-foreground",
           )}
         >
@@ -168,7 +170,7 @@
     </div>
 
     {#if error !== ""}
-      <p role="alert" class="text-xs text-destructive">{error}</p>
+      <p role="alert" class="text-xs text-rose-300">{error}</p>
     {/if}
   </div>
 </article>
@@ -185,13 +187,13 @@
       <span class="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         {title}
       </span>
-      <span class="rounded-full bg-muted px-1.5 text-[10px] tabular-nums text-muted-foreground">
+      <span class="rounded-full bg-muted/60 px-1.5 text-[10px] tabular-nums text-muted-foreground">
         {items.length}
       </span>
     </div>
 
     {#if items.length === 0}
-      <p class="text-[11px] text-muted-foreground/70">None</p>
+      <p class="text-[11px] text-muted-foreground/90">None</p>
     {:else}
       <ul class="space-y-1">
         {#each items as item, index (index)}
@@ -203,7 +205,7 @@
               spellcheck="false"
               autocomplete="off"
               {disabled}
-              class="h-8 min-w-0 flex-1 rounded-md border border-input bg-background/60 px-2 font-mono text-[11px] text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+              class="h-8 min-w-0 flex-1 rounded-md border border-border bg-background/70 px-2 font-mono text-[11px] text-foreground focus-visible:border-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:pointer-events-none disabled:opacity-50"
             />
             <button
               type="button"
@@ -234,7 +236,7 @@
         spellcheck="false"
         autocomplete="off"
         {disabled}
-        class="h-8 min-w-0 flex-1 rounded-md border border-dashed border-input bg-transparent px-2 text-[11px] text-foreground placeholder:text-muted-foreground/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+        class="h-8 min-w-0 flex-1 rounded-md border border-dashed border-border bg-transparent px-2 text-[11px] text-foreground placeholder:text-muted-foreground focus-visible:border-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:pointer-events-none disabled:opacity-50"
       />
       <Button
         type="button"
@@ -247,6 +249,6 @@
         Add
       </Button>
     </div>
-    <p class="text-[10px] leading-snug text-muted-foreground/70">{hint}</p>
+    <p class="text-[10px] leading-snug text-muted-foreground/90">{hint}</p>
   </div>
 {/snippet}

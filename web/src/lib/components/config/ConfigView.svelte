@@ -66,14 +66,14 @@
 <div class="h-full overflow-y-auto">
   <div class="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 lg:py-8">
     <header
-      class="flex flex-col gap-4 border-b border-border/60 pb-5 sm:flex-row sm:items-start sm:justify-between"
+      class="flex flex-col gap-4 border-b border-border/70 pb-5 sm:flex-row sm:items-start sm:justify-between"
     >
       <div class="min-w-0">
         <h1 class="text-xl font-semibold tracking-tight">Configuration</h1>
         <p class="mt-1 max-w-2xl text-sm text-muted-foreground">
           Edit detection categories, replacement styles, and logging. Changes are
           written to
-          <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs text-foreground/80">
+          <code class="rounded bg-muted/60 px-1 py-0.5 font-mono text-xs text-foreground/80">
             config.toml
           </code>
           and applied without restarting the proxy.
@@ -86,13 +86,16 @@
             </span>
           {:else if isDirty}
             <span
-              class="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-medium text-amber-700 dark:text-amber-300"
+              class="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-medium text-amber-300"
             >
               Unsaved changes
             </span>
           {:else if state.status === "ready"}
             <span class="inline-flex items-center gap-1.5 text-muted-foreground">
-              <span class="h-2 w-2 rounded-full bg-emerald-500" aria-hidden="true"></span>
+              <span
+                class="h-2 w-2 rounded-full bg-accent shadow-[0_0_8px_1px_rgba(34,197,94,0.55)]"
+                aria-hidden="true"
+              ></span>
               All changes saved
             </span>
           {/if}
@@ -119,7 +122,7 @@
     {#if state.status === "loading" && config === null}
       <div class="flex flex-col items-center justify-center gap-3 py-24 text-center">
         <span
-          class="h-5 w-5 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-foreground"
+          class="h-5 w-5 animate-spin rounded-full border-2 border-muted-foreground/25 border-t-accent"
           aria-hidden="true"
         ></span>
         <p class="text-sm text-muted-foreground">Loading configuration…</p>
@@ -129,11 +132,11 @@
         class="mt-8 rounded-lg border border-destructive/40 bg-destructive/5 p-6 text-sm"
         role="alert"
       >
-        <h2 class="font-semibold text-destructive">Could not load configuration</h2>
+        <h2 class="font-semibold text-rose-300">Could not load configuration</h2>
         <p class="mt-2 text-muted-foreground">
           {state.error ?? "The configuration API did not return a document."}
         </p>
-        <p class="mt-2 text-xs text-muted-foreground/80">
+        <p class="mt-2 text-xs text-muted-foreground/90">
           The editor calls <code class="font-mono">/api/config</code>, which the
           proxy serves when the rules API is enabled.
         </p>
@@ -160,17 +163,17 @@
               />
             </svg>
             <div class="min-w-0 flex-1">
-              <p class="font-medium text-destructive">Request failed</p>
+              <p class="font-medium text-rose-300">Request failed</p>
               <p class="mt-1 break-words text-muted-foreground">{state.error}</p>
               {#if state.field !== ""}
-                <p class="mt-1 font-mono text-[11px] text-muted-foreground/80">
+                <p class="mt-1 font-mono text-[11px] text-muted-foreground/90">
                   {state.field}
                 </p>
               {/if}
             </div>
             <button
               type="button"
-              class="shrink-0 rounded-md px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              class="shrink-0 rounded-md px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
               onclick={dismissError}
             >
               Dismiss
@@ -180,15 +183,18 @@
 
         {#if state.notice !== null}
           <div
-            class="flex items-start gap-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm"
+            class="flex items-start gap-3 rounded-lg border border-accent/40 bg-accent/10 p-3 text-sm"
             role="status"
             aria-live="polite"
           >
-            <span class="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-emerald-500" aria-hidden="true"></span>
-            <p class="min-w-0 flex-1 text-emerald-800 dark:text-emerald-200">{state.notice}</p>
+            <span
+              class="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-accent shadow-[0_0_8px_1px_rgba(34,197,94,0.5)]"
+              aria-hidden="true"
+            ></span>
+            <p class="min-w-0 flex-1 text-emerald-200">{state.notice}</p>
             <button
               type="button"
-              class="shrink-0 rounded-md px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              class="shrink-0 rounded-md px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
               onclick={dismissNotice}
             >
               Dismiss
@@ -201,7 +207,7 @@
             class="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm"
             role="alert"
           >
-            <p class="font-medium text-amber-800 dark:text-amber-200">
+            <p class="font-medium text-amber-200">
               Fix these before saving
             </p>
             <ul class="mt-1 list-inside list-disc space-y-0.5 text-xs text-muted-foreground">
@@ -218,7 +224,7 @@
             role="status"
           >
             <svg
-              class="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400"
+              class="mt-0.5 h-4 w-4 shrink-0 text-amber-400"
               viewBox="0 0 16 16"
               aria-hidden="true"
               focusable="false"
@@ -229,7 +235,7 @@
               />
             </svg>
             <div class="min-w-0">
-              <p class="font-medium text-amber-800 dark:text-amber-200">
+              <p class="font-medium text-amber-200">
                 Logging settings changed
               </p>
               <p class="mt-0.5 text-xs text-muted-foreground">
@@ -242,10 +248,10 @@
         <div class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,25rem)]">
           <div class="min-w-0 space-y-5">
             <section
-              class="rounded-lg border border-border/60 bg-card/30"
+              class="rounded-lg border border-border/80 bg-card/40"
               aria-labelledby="logging-heading"
             >
-              <div class="border-b border-border/50 px-4 py-3">
+              <div class="border-b border-border/60 px-4 py-3">
                 <h2 id="logging-heading" class="text-sm font-semibold">Logging</h2>
                 <p class="mt-0.5 text-xs text-muted-foreground">
                   Diagnostics written to the proxy log at info level.
@@ -312,7 +318,7 @@
     aria-checked={logValue(flag)}
     onclick={() => setLogFlag(flag, !logValue(flag))}
     disabled={state.busy}
-    class="flex w-full items-start gap-3 rounded-md border border-border/60 bg-background/40 p-3 text-left transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+    class="flex w-full items-start gap-3 rounded-md border border-border/70 bg-background/40 p-3 text-left transition-colors hover:border-border hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:pointer-events-none disabled:opacity-50"
   >
     <span class="min-w-0 flex-1">
       <span class="block text-sm font-medium">{title}</span>
@@ -322,12 +328,12 @@
       class="relative mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-transparent transition-colors {logValue(
         flag,
       )
-        ? 'bg-primary'
+        ? 'bg-accent shadow-[0_0_10px_-2px_rgba(34,197,94,0.8)]'
         : 'bg-muted'}"
       aria-hidden="true"
     >
       <span
-        class="pointer-events-none block h-4 w-4 rounded-full bg-background shadow transition-transform {logValue(
+        class="pointer-events-none block h-4 w-4 rounded-full bg-white shadow transition-transform {logValue(
           flag,
         )
           ? 'translate-x-4'

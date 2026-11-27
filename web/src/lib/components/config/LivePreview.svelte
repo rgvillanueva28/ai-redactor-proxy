@@ -99,27 +99,27 @@ Key sk-proj-abc123def456`;
   function badgeClass(category: string): string {
     switch (category) {
       case "EMAIL":
-        return "border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300";
+        return "border-sky-400/30 bg-sky-400/10 text-sky-300";
       case "PHONE":
-        return "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
+        return "border-emerald-400/30 bg-emerald-400/10 text-emerald-300";
       case "CC":
-        return "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300";
+        return "border-amber-400/30 bg-amber-400/10 text-amber-200";
       case "SSN":
-        return "border-rose-500/40 bg-rose-500/10 text-rose-700 dark:text-rose-300";
+        return "border-rose-400/30 bg-rose-400/10 text-rose-300";
       case "IP":
-        return "border-violet-500/40 bg-violet-500/10 text-violet-700 dark:text-violet-300";
+        return "border-violet-400/30 bg-violet-400/10 text-violet-300";
       case "PATH":
-        return "border-cyan-500/40 bg-cyan-500/10 text-cyan-700 dark:text-cyan-300";
+        return "border-cyan-400/30 bg-cyan-400/10 text-cyan-300";
       case "APIKEY":
-        return "border-orange-500/40 bg-orange-500/10 text-orange-700 dark:text-orange-300";
+        return "border-orange-400/30 bg-orange-400/10 text-orange-300";
       case "CRED":
-        return "border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-300";
+        return "border-red-400/30 bg-red-400/10 text-red-300";
       case "DOMAIN":
-        return "border-indigo-500/40 bg-indigo-500/10 text-indigo-700 dark:text-indigo-300";
+        return "border-indigo-400/30 bg-indigo-400/10 text-indigo-300";
       case "CLIENT":
-        return "border-teal-500/40 bg-teal-500/10 text-teal-700 dark:text-teal-300";
+        return "border-teal-400/30 bg-teal-400/10 text-teal-300";
       case "NAME":
-        return "border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300";
+        return "border-fuchsia-400/30 bg-fuchsia-400/10 text-fuchsia-300";
       default:
         return "border-border bg-muted/40 text-muted-foreground";
     }
@@ -127,10 +127,10 @@ Key sk-proj-abc123def456`;
 </script>
 
 <section
-  class="rounded-lg border border-border/60 bg-card/30"
+  class="rounded-lg border border-border/80 bg-card/40"
   aria-labelledby="live-preview-heading"
 >
-  <header class="flex items-center gap-2 border-b border-border/50 px-4 py-3">
+  <header class="flex items-center gap-2 border-b border-border/60 px-4 py-3">
     <h2 id="live-preview-heading" class="text-sm font-semibold">Live preview</h2>
     {#if pending}
       <span
@@ -162,9 +162,9 @@ Key sk-proj-abc123def456`;
         rows="5"
         spellcheck="false"
         placeholder="Paste text to see how it is redacted…"
-        class="w-full resize-y rounded-md border border-input bg-background/60 p-2 font-mono text-xs leading-relaxed text-foreground placeholder:font-sans placeholder:text-muted-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        class="w-full resize-y rounded-md border border-border bg-background/70 p-2 font-mono text-xs leading-relaxed text-foreground placeholder:font-sans placeholder:text-muted-foreground focus-visible:border-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
       ></textarea>
-      <p class="text-[11px] text-muted-foreground/70">
+      <p class="text-[11px] text-muted-foreground/90">
         Runs against the unsaved editor state.
       </p>
     </div>
@@ -176,13 +176,13 @@ Key sk-proj-abc123def456`;
       {#if error !== ""}
         <p
           role="status"
-          class="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive"
+          class="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-rose-300"
         >
           {error}
         </p>
       {:else}
         <pre
-          class="min-h-20 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/60 bg-muted/30 p-2 font-mono text-xs leading-relaxed text-foreground/90"
+          class="min-h-20 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/70 bg-background/60 p-2 font-mono text-xs leading-relaxed text-foreground/90"
           aria-live="polite">{result?.redacted ?? "Preview appears here."}</pre>
       {/if}
     </div>
@@ -195,7 +195,7 @@ Key sk-proj-abc123def456`;
         <ul class="max-h-56 space-y-1 overflow-y-auto pr-1">
           {#each visibleMatches as match, index (index)}
             <li
-              class="flex flex-wrap items-center gap-x-2 gap-y-1 rounded border border-border/50 bg-background/40 px-2 py-1 text-[11px]"
+              class="flex flex-wrap items-center gap-x-2 gap-y-1 rounded border border-border/60 bg-background/50 px-2 py-1 text-[11px]"
             >
               <span class="rounded-full border px-1.5 py-0.5 font-medium {badgeClass(match.category)}">
                 {categoryLabel(match.category)}

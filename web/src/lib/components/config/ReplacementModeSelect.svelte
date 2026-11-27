@@ -45,7 +45,7 @@
       value={mode}
       onchange={handleMode}
       {disabled}
-      class="h-9 w-full rounded-md border border-input bg-background/60 px-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+      class="h-9 w-full rounded-md border border-border bg-background/70 px-2 text-sm text-foreground focus-visible:border-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:pointer-events-none disabled:opacity-50"
     >
       <option value="placeholder">Placeholder ({placeholder})</option>
       <option value="custom">Custom text</option>
@@ -71,24 +71,24 @@
         aria-invalid={missingText}
         aria-describedby={missingText ? `replacement-error-${id}` : undefined}
         class={cn(
-          "h-9 w-full rounded-md border bg-background/60 px-2 font-mono text-sm text-foreground placeholder:font-sans placeholder:text-muted-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
-          missingText ? "border-destructive/70" : "border-input",
+          "h-9 w-full rounded-md border bg-background/70 px-2 font-mono text-sm text-foreground placeholder:font-sans placeholder:text-muted-foreground focus-visible:border-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:pointer-events-none disabled:opacity-50",
+          missingText ? "border-destructive/70" : "border-border",
         )}
       />
       {#if missingText}
-        <p id="replacement-error-{id}" class="text-[11px] text-destructive">
+        <p id="replacement-error-{id}" class="text-[11px] text-rose-300">
           Custom text is required.
         </p>
       {:else}
-        <p class="text-[11px] leading-snug text-muted-foreground/70">
+        <p class="text-[11px] leading-snug text-muted-foreground/90">
           Every match in this category becomes this exact string.
         </p>
       {/if}
     </div>
   {:else}
-    <p class="self-end pb-1 text-[11px] leading-snug text-muted-foreground/70">
+    <p class="self-end pb-1 text-[11px] leading-snug text-muted-foreground/90">
       Each new value gets a numbered tag, for example
-      <code class="rounded bg-muted px-1 py-0.5 font-mono text-foreground/80">
+      <code class="rounded bg-muted/60 px-1 py-0.5 font-mono text-foreground/80">
         {placeholder}
       </code>.
     </p>
