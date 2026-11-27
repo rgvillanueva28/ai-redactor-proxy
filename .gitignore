@@ -41,3 +41,7 @@ desktop.ini
 # --- Distribution ---
 /dist/
 /build/
+
+# --- Web UI tooling ---
+/web/node_modules/
+/web/.svelte-kit/
