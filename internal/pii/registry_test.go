@@ -22,6 +22,7 @@ func TestNewRegistryWiresEnabledDetectorsInStableOrder(t *testing.T) {
 		CategoryIP,
 		CategoryPath,
 		CategoryAPIKey,
+		CategoryCredential,
 		CategoryDomain,
 	}
 	if len(r.detectors) != len(want) {
@@ -31,6 +32,82 @@ func TestNewRegistryWiresEnabledDetectorsInStableOrder(t *testing.T) {
 		if got := r.detectors[i].Category(); got != w {
 			t.Fatalf("detector %d category = %q, want %q", i, got, w)
 		}
+	}
+}
+
+func TestNewRegistryOrderUnchangedWithCustomization(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.PII.Email.Names = []string{"Team Blob"}
+	cfg.PII.Phone.Patterns = []string{`\bINTERNAL-\d{4}\b`}
+	cfg.PII.Domain.Denylist = []string{"example.com"}
+	cfg.PII.Client.Names = []string{"Acme Corp"}
+	cfg.PII.EnablePersonName = true
+
+	r, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	want := []Category{
+		CategoryEmail,
+		CategoryPhone,
+		CategoryCreditCard,
+		CategorySSN,
+		CategoryIP,
+		CategoryPath,
+		CategoryAPIKey,
+		CategoryCredential,
+		CategoryDomain,
+		CategoryClientName,
+		CategoryPersonName,
+	}
+	if len(r.detectors) != len(want) {
+		t.Fatalf("detector count = %d, want %d", len(r.detectors), len(want))
+	}
+	for i, w := range want {
+		if got := r.detectors[i].Category(); got != w {
+			t.Fatalf("detector %d category = %q, want %q", i, got, w)
+		}
+	}
+}
+
+func TestNewRegistryCustomizationEndToEnd(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.PII.Email.Names = []string{"Team Blob"}
+	cfg.PII.Phone.Patterns = []string{`\bINTERNAL-\d{4}\b`}
+	cfg.PII.Domain.Denylist = []string{"example.com"}
+
+	r, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	text := "Team Blob rang INTERNAL-1234 from acme.io, not example.com"
+	redacted, mapping := r.Redactor().Redact(text)
+	defer PutMapping(mapping)
+
+	want := "<EMAIL_1> rang <PHONE_1> from <DOMAIN_1>, not example.com"
+	if redacted != want {
+		t.Fatalf("Redact = %q, want %q", redacted, want)
+	}
+	if restored := r.Unredactor().Unredact(redacted, mapping); restored != text {
+		t.Fatalf("round trip = %q, want %q", restored, text)
+	}
+}
+
+func TestNewRegistryClientNamesFromCategoryBlock(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.PII.Client.Names = []string{"Acme Corp"}
+
+	r, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	got, mapping := r.Redactor().Redact("Acme Corp shipped it")
+	defer PutMapping(mapping)
+	if want := "<CLIENT_1> shipped it"; got != want {
+		t.Fatalf("Redact = %q, want %q", got, want)
 	}
 }
 
@@ -53,6 +130,7 @@ func TestNewRegistryWiresAdvancedDetectorsAfterAPIKey(t *testing.T) {
 		CategoryIP,
 		CategoryPath,
 		CategoryAPIKey,
+		CategoryCredential,
 		CategoryDomain,
 		CategoryClientName,
 		CategoryPersonName,
@@ -191,6 +269,18 @@ func TestNewRegistryRespectsToggles(t *testing.T) {
 			wantOutput: "key sk-proj-abc123def456ghi789jkl012mno345pqr678 ok",
 		},
 		{
+			name:       "credential_disabled",
+			configure:  func(c *config.Config) { c.PII.EnableCredential = false },
+			text:       "password=hunter2 ok",
+			wantOutput: "password=hunter2 ok",
+		},
+		{
+			name:       "credential_enabled",
+			configure:  func(c *config.Config) {},
+			text:       "password=hunter2 ok",
+			wantOutput: "password=<CRED_1> ok",
+		},
+		{
 			name:       "email_enabled",
 			configure:  func(c *config.Config) {},
 			text:       "mail foo@bar.com now",
@@ -226,6 +316,7 @@ func TestNewRegistryAllDisabled(t *testing.T) {
 	cfg.PII.EnableIP = false
 	cfg.PII.EnablePath = false
 	cfg.PII.EnableAPIKey = false
+	cfg.PII.EnableCredential = false
 	cfg.PII.EnableDomain = false
 	cfg.PII.EnableClientName = false
 	cfg.PII.EnablePersonName = false
